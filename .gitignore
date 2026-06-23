@@ -11,7 +11,7 @@ dist/
 .coverage
 .tox/
 
-# Local live-test dbt project (not part of the package)
+# Local live-test dbt project
 demo/
 
 # dbt run logs

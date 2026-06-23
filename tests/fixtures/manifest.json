@@ -1,0 +1,74 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+    "dbt_version": "1.8.0",
+    "project_name": "jaffle_shop"
+  },
+  "nodes": {
+    "model.jaffle_shop.stg_orders": {
+      "resource_type": "model",
+      "name": "stg_orders",
+      "database": "my-gcp-project",
+      "schema": "jaffle_shop",
+      "alias": "stg_orders",
+      "relation_name": "`my-gcp-project`.`jaffle_shop`.`stg_orders`",
+      "depends_on": {"nodes": [], "macros": []},
+      "columns": {
+        "order_id": {"name": "order_id", "description": "primary key", "data_type": "INT64"}
+      },
+      "contract": {"enforced": false},
+      "compiled_code": "select order_id, amount, status from `my-gcp-project`.`raw`.`orders`"
+    },
+    "model.jaffle_shop.fct_orders": {
+      "resource_type": "model",
+      "name": "fct_orders",
+      "database": "my-gcp-project",
+      "schema": "jaffle_shop",
+      "alias": "fct_orders",
+      "relation_name": "`my-gcp-project`.`jaffle_shop`.`fct_orders`",
+      "depends_on": {"nodes": ["model.jaffle_shop.stg_orders"], "macros": []},
+      "columns": {
+        "order_id": {"name": "order_id", "description": "", "data_type": "INT64"},
+        "amount": {"name": "amount", "description": "order total", "data_type": "NUMERIC"}
+      },
+      "contract": {"enforced": true},
+      "compiled_code": "select order_id, amount from `my-gcp-project`.`jaffle_shop`.`stg_orders`"
+    },
+    "test.jaffle_shop.not_null_fct_orders_order_id.a1b2c3": {
+      "resource_type": "test",
+      "name": "not_null_fct_orders_order_id",
+      "depends_on": {"nodes": ["model.jaffle_shop.fct_orders"], "macros": ["macro.dbt.test_not_null"]},
+      "attached_node": "model.jaffle_shop.fct_orders",
+      "column_name": "order_id",
+      "test_metadata": {"name": "not_null"}
+    },
+    "seed.jaffle_shop.country_codes": {
+      "resource_type": "seed",
+      "name": "country_codes",
+      "database": "my-gcp-project",
+      "schema": "jaffle_shop",
+      "alias": "country_codes",
+      "relation_name": "`my-gcp-project`.`jaffle_shop`.`country_codes`"
+    }
+  },
+  "sources": {
+    "source.jaffle_shop.raw.orders": {
+      "resource_type": "source",
+      "name": "orders",
+      "identifier": "orders",
+      "database": "my-gcp-project",
+      "schema": "raw",
+      "relation_name": "`my-gcp-project`.`raw`.`orders`"
+    }
+  },
+  "exposures": {
+    "exposure.jaffle_shop.orders_dashboard": {
+      "resource_type": "exposure",
+      "name": "orders_dashboard",
+      "type": "dashboard",
+      "depends_on": {"nodes": ["model.jaffle_shop.fct_orders"], "macros": []},
+      "owner": {"name": "Data Team", "email": "data@example.com"}
+    }
+  },
+  "macros": {}
+}

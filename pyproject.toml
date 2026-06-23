@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dbt-debt"
+version = "0.0.1"
+description = "A technical-debt scorecard for dbt projects on BigQuery: finds unused models and columns and what is safely removable."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = [
+    "google-cloud-bigquery>=3.0",
+    "sqlglot>=23.0",
+]
+
+[project.optional-dependencies]
+fusion = ["duckdb>=0.10"]
+dev = ["pytest>=8.0", "mypy>=1.8", "ruff>=0.4"]
+
+[project.scripts]
+dbt-debt = "dbt_debt.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dbt_debt"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

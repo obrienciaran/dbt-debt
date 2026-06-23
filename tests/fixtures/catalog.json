@@ -1,0 +1,36 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/catalog/v1.json",
+    "dbt_version": "1.8.0"
+  },
+  "nodes": {
+    "model.jaffle_shop.stg_orders": {
+      "metadata": {"database": "my-gcp-project", "schema": "jaffle_shop", "name": "stg_orders"},
+      "columns": {
+        "order_id": {"type": "INT64", "index": 1, "name": "order_id"},
+        "amount": {"type": "NUMERIC", "index": 2, "name": "amount"},
+        "status": {"type": "STRING", "index": 3, "name": "status"}
+      },
+      "stats": {"num_bytes": {"id": "num_bytes", "value": 4096, "include": true}}
+    },
+    "model.jaffle_shop.fct_orders": {
+      "metadata": {"database": "my-gcp-project", "schema": "jaffle_shop", "name": "fct_orders"},
+      "columns": {
+        "order_id": {"type": "INT64", "index": 1, "name": "order_id"},
+        "amount": {"type": "NUMERIC", "index": 2, "name": "amount"}
+      },
+      "stats": {"num_bytes": {"id": "num_bytes", "value": 8192, "include": true}}
+    }
+  },
+  "sources": {
+    "source.jaffle_shop.raw.orders": {
+      "metadata": {"database": "my-gcp-project", "schema": "raw", "name": "orders"},
+      "columns": {
+        "order_id": {"type": "INT64", "index": 1, "name": "order_id"},
+        "amount": {"type": "NUMERIC", "index": 2, "name": "amount"},
+        "status": {"type": "STRING", "index": 3, "name": "status"}
+      },
+      "stats": {}
+    }
+  }
+}

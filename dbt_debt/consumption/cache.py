@@ -130,7 +130,7 @@ class CachingBigQueryClient:
             _relations_from_json,
         )
 
-    def _path(self, method: str, extra: Mapping[str, Any]) -> Path:
+    def _path(self, method: str, extra: Mapping[str, object]) -> Path:
         payload = {"method": method, "key_parts": self._key_parts, "extra": extra}
         blob = json.dumps(payload, sort_keys=True).encode()
         return self._dir / f"{hashlib.sha256(blob).hexdigest()}.json"
@@ -138,7 +138,7 @@ class CachingBigQueryClient:
     def _cached(
         self,
         method: str,
-        extra: Mapping[str, Any],
+        extra: Mapping[str, object],
         fetch: Callable[[], _T],
         encode: Callable[[_T], Any],
         decode: Callable[[Any], _T],
@@ -151,7 +151,7 @@ class CachingBigQueryClient:
         self._write(path, encode(value))
         return value
 
-    def _read(self, path: Path) -> Any | None:
+    def _read(self, path: Path) -> object | None:
         """Return the cached payload, or None when absent or expired (expired files are removed)."""
 
         if not path.exists():
@@ -164,9 +164,10 @@ class CachingBigQueryClient:
         if datetime.now(timezone.utc) - created > self._ttl:
             path.unlink(missing_ok=True)
             return None
-        return entry["data"]
+        data: object = entry["data"]
+        return data
 
-    def _write(self, path: Path, data: Any) -> None:
+    def _write(self, path: Path, data: object) -> None:
         entry = {"created": datetime.now(timezone.utc).isoformat(), "data": data}
         path.write_text(json.dumps(entry))
 

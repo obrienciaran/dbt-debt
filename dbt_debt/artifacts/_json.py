@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def as_dict(value: Any) -> dict[str, Any]:
+def as_dict(value: object) -> dict[str, Any]:
     """Coerce a possibly-missing or null artifact field to a dict."""
 
     return value if isinstance(value, dict) else {}

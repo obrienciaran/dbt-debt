@@ -4,9 +4,9 @@ dbt-debt finds the dead weight in a dbt project on BigQuery: which models and co
 anymore, which are safe to remove, and which tables exist in your warehouse with no dbt model behind
 them.
 
-It works by comparing your dbt project against two things BigQuery already knows — a log of every
+It works by comparing your dbt project against two things BigQuery already knows, a log of every
 query that has run, and a list of the tables that actually exist. There's no account to make and
-nothing to log into: if `dbt run` works on your machine, `dbt-debt scan` works too.
+nothing to log into. If `dbt run` works on your machine, `dbt-debt scan` works too, provided you have the correct BigQuery permissions.
 
 dbt-debt only reports. It never edits or deletes anything.
 
@@ -16,14 +16,14 @@ Models:
   ✗ 17 unused
 Columns:
   ✓ 4,382 active
-  ✗ 623 unused
+  ✗ 2 unused
 Orphans:
   ✗ 4 tables in your dbt datasets with no dbt model behind them
   ! 2 tables your models read that dbt was never told about
 Potential savings:
-  - 623 columns you could remove
-  - 71 tests you could remove with them
-Top 10 of 623 unused columns (ranked by table size; BigQuery can't size a single column):
+  - 3 columns you could remove
+  - 2 tests you could remove with them
+Top 3 of 3 unused columns (ranked by table bytes; Bigquery has no per-column sizes):
   1. dim_customer.old_marketing_score
   2. fct_orders.legacy_discount_code
   3. mart_sales.temp_margin_calc
@@ -44,17 +44,17 @@ The **lookback window** is how far back we read BigQuery's query log (180 days b
   has a dependency is listed separately and not counted here.
 - **tests you could remove.** Data tests attached to a model or column you'd be removing. If the
   thing goes, the test can go with it.
-- **exposures affected.** An **exposure** is a downstream consumer — a dashboard or report — your
+- **exposures affected.** An **exposure** is a downstream consumer (e.g. a dashboard or report) your
   team has written into the dbt project. An unused model that feeds one is flagged "affected — check
   before removing" so you don't pull out something still feeding a dashboard. Exposures whose models
   are all active aren't listed.
 - **tables with no dbt model behind them (orphans).** A real table or view in a dataset dbt builds
-  into, but which dbt has no record of — usually left over from a renamed or deleted model, or made
-  by hand. We only look inside the datasets dbt builds into, so your raw input tables are never
+  into, but which dbt has no record of, usually left over from a renamed or deleted model, or made
+  by hand. dbt-debt only look inside the datasets dbt builds into, so any raw input tables are never
   flagged.
 - **tables your models read but dbt was never told about.** A model reads from a table you never
-  declared; add it as a `source()`. We find these by reading the model's own SQL, so it needs no
-  extra BigQuery permission and shows up even when we can't list the warehouse.
+  declared. These need to be added as a `source()`. dbt-debt finds these by reading the model's SQL, so it needs no
+  extra BigQuery permission and shows up even if it can't list the entire warehouse tables.
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage you'd
   reclaim; a single column can't be sized (BigQuery doesn't report storage per column), so columns
   rank by their table's size instead.
@@ -81,9 +81,8 @@ dbt-debt scan --columns           # checks models and columns
 `scan` reads two files dbt writes into `target/` (`manifest.json`, your project; `catalog.json`,
 every column), asks BigQuery what's been used, and tells you what isn't.
 
-In a normal terminal, `dbt-debt scan` opens a simple tabbed viewer (Summary / Detail / JSON /
-Export) — no flags to remember. When you pipe the output, run it in CI, or send it to a script, the
-viewer steps aside and the report just prints:
+In the terminal, `dbt-debt scan` opens a simple tabbed UI (Summary / Detail / JSON /
+Export). When you pipe the output, run it in CI, or send it to a script, there is no UI and the report just prints:
 
 | What you run | What you get |
 |---|---|
@@ -97,14 +96,14 @@ viewer steps aside and the report just prints:
 ### ⚡ Making repeat runs fast (the cache)
 
 The slow part of a scan is talking to BigQuery, so the first scan saves its BigQuery results to a
-small file in your temp folder. Run `scan` (or `scan --columns`) again soon after and it reads that
-file instead of re-querying, finishing almost instantly.
+small file in your temp folder. Running `dbt-debt scan` (or `dbt-debt scan --columns`) again soon after and it reads that
+file instead of re-querying.
 
 Saved results count as fresh for 1 hour; after that the next scan refetches and replaces them. Change
 the window with `--cache-ttl <hours>`, or skip saved results with `--no-cache` for the latest
 numbers.
 
-The file isn't deleted when it goes stale — the 1-hour limit only decides when results are too old to
+The file isn't deleted when it goes stale. The 1-hour limit only decides when results are too old to
 trust. It stays in your temp folder until something removes it:
 
 - `dbt-debt --clear-cache` deletes all of dbt-debt's saved results and does nothing else;
@@ -113,13 +112,13 @@ trust. It stays in your temp folder until something removes it:
 - or your OS clears its temp folder — slowly and unpredictably (Windows may never do it), so don't
   count on this.
 
-These behave the same on Mac, Windows, and Linux. For a clean slate, `dbt-debt --clear-cache`.
+For a clean slate, its easiest to run `dbt-debt --clear-cache`.
 
 ## 🔧 How it works
 
-1. Read `manifest.json` and `catalog.json` from `target/`. (dbt-debt never imports or runs dbt — it
+1. Read `manifest.json` and `catalog.json` from `target/`. (dbt-debt never imports or runs dbt, it
    just reads the files dbt already wrote.)
-2. Ask BigQuery which tables real people queried in the lookback window, ignoring dbt's own queries.
+2. Asks BigQuery which tables were queried (by people or tools) in the lookback window, ignoring dbt's own queries.
    With `--columns`, also read those queries' text to see which columns they used.
 3. Trace where each column came from, using your models' SQL, so usage flows back up to the columns
    that fed it.
@@ -134,23 +133,23 @@ dbt tracks two kinds of table: the ones it builds (models, seeds, snapshots) and
 (declared sources). The orphan check compares both against what's actually in BigQuery and flags two
 mismatches:
 
-- An **orphan** is a table really there in BigQuery, in a dataset dbt builds into, but with no dbt
-  record — usually left over from a renamed or deleted model, or made by hand.
+- An **orphan** is a table in BigQuery, in a dataset dbt builds into, but with no dbt
+  record. This is usually left over from a renamed or deleted model, or made by hand.
 - An **undeclared source** is a table a model reads from that you never told dbt about; fix it by
   declaring it as a `source()`.
 
-Two rules keep these honest: we only look inside the datasets dbt builds into (so raw input tables
+Two rules keep these accurate: we only look inside the datasets dbt builds into (so raw input tables
 are never flagged), and a table a model reads always counts as undeclared, never as an orphan.
 
 ## 🎯 What counts as "usage"
 
-Usage is any `SELECT` that ran against BigQuery in the lookback window and wasn't dbt's own query —
+Usage is any `SELECT` that ran against BigQuery in the lookback window and wasn't dbt's own query,
 including BI tools and dashboards that query BigQuery directly (Looker, Tableau, scheduled queries),
 which land in the query log like anything else.
 
 A few cases to keep in mind:
 
-- **Reads that don't hit BigQuery** — a cached BI extract, a scheduled export, a copy downstream —
+- **Reads that don't hit BigQuery** — a cached BI extract, a scheduled export, a copy downstream,
   never appear in the query log, so they can look unused. Tell dbt-debt about them by declaring
   exposures (see below); a model that feeds one is flagged for review instead of marked removable.
 - **Anything used less often than the lookback window.** The default 180 days is also the max, since
@@ -159,11 +158,11 @@ A few cases to keep in mind:
 - **`SELECT *`** is handled carefully: every column counts as used, so a column read only through a
   `*` is never wrongly called unused.
 
-So "unused" means "no sign of use in the log." How far to trust it depends on *who* reads the column:
+So "unused" means "no sign of use in the log." How far to trust it depends on who reads the column:
 
 - Columns mid-pipeline are mostly read by other dbt models, whose reads land in the log. Nothing in
   the log is a strong "unused" signal you can trust.
-- Columns at the end — your final marts — are often read by tools outside BigQuery, like a dashboard
+- Columns at the end, your final marts, are often read by tools outside BigQuery, like a dashboard
   or export, whose reads can miss the log. An "unused" verdict there is less certain; use judgement.
   Best practice is to declare those consumers as exposures so a model feeding one is flagged for
   review instead.
@@ -196,9 +195,9 @@ the project your models live in (read from your project, or set with `--project`
 
 - **Required:** permission to see everyone's queries, not just your own (`bigquery.jobs.listAll`,
   part of `roles/bigquery.resourceViewer`). dbt-debt checks for this up front and stops if it's
-  missing; otherwise "unused" would quietly mean "unused by me".
+  missing; otherwise "unused" would mean "unused by me".
 - **Optional (for orphans):** read access to the datasets dbt builds into. Listing the tables that
-  physically exist asks each dataset for its own table list — basic read access anyone who writes dbt
+  physically exist asks each dataset for its own table list, basic read access anyone who writes dbt
   models already has, not the project-wide access even an Owner can be refused. Without it, the
   orphan list is skipped with a warning and the rest of the scan is unaffected.
 
@@ -224,12 +223,6 @@ dbt-debt scan
     --no-cache                ask BigQuery directly, ignoring (and not writing) saved results
     --cache-ttl 1             how many hours saved results stay fresh before being re-fetched
     --clear-cache             clear this project's saved results, then run a fresh scan
-```
-
-To clear saved results *without* running a scan, drop the `scan`:
-
-```
-dbt-debt --clear-cache        delete all of dbt-debt's saved results and stop
 ```
 
 Exit codes: `0` all good, `2` couldn't find the dbt files, `3` missing the required permission.

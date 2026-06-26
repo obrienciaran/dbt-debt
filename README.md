@@ -10,9 +10,7 @@ nothing to log into. If `dbt run` works on your machine, `dbt-debt scan` works t
 
 dbt-debt only reports. It never edits or deletes anything.
 
-
-https://github.com/user-attachments/assets/a673aa9d-bb41-47e6-aaa0-13b497f024c6
-
+https://github.com/user-attachments/assets/850ba77f-61c8-446e-bf5c-cc49f0225391
 
 ```
 Models:

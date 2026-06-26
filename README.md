@@ -129,16 +129,16 @@ For a clean slate, its easiest to run `dbt-debt --clear-cache`.
 
 ### 🔍 Orphans and undeclared sources, explained
 
-dbt tracks two kinds of table: the ones it builds (models, seeds, snapshots) and the ones it reads
-(declared sources). The orphan check compares both against what's actually in BigQuery and flags two
-mismatches:
+dbt keeps a record of every table it builds and every table it reads. The orphan check compares that
+record against the tables that are actually in BigQuery and flags two kinds of gap:
 
-- An **orphan** is a table in BigQuery, in a dataset dbt builds into, but with no dbt
-  record. This is usually left over from a renamed or deleted model, or made by hand.
-- An **undeclared source** is a table a model reads from that you never told dbt about; fix it by
-  declaring it as a `source()`.
+- An **orphan** is a table really there in BigQuery, in a dataset dbt builds into, but with no dbt
+  record — usually left over from a renamed or deleted model, or made by hand.
+- An **undeclared source** is a table a model reads from that you never told dbt about, so it sits
+  outside the DAG and is never tracked or tested; fix it by declaring it in a `sources.yml` file
+  and referencing it with `{{ source() }}`.
 
-Two rules keep these accurate: we only look inside the datasets dbt builds into (so raw input tables
+Two rules keep these honest: we only look inside the datasets dbt builds into (so raw input tables
 are never flagged), and a table a model reads always counts as undeclared, never as an orphan.
 
 ## 🎯 What counts as "usage"

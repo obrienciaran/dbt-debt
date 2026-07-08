@@ -7,13 +7,22 @@ break loading; the schema version is captured so a breaking change is at least v
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
 
-from dbt_debt.artifacts._json import as_dict
-from dbt_debt.domain import Exposure, Manifest, Model, Relation, Test, relation_key
+from dbt_debt.artifacts._json import as_dict, load_artifact
+from dbt_debt.domain import (
+    ColumnRef,
+    Exposure,
+    Manifest,
+    Model,
+    Relation,
+    SemanticConsumer,
+    Test,
+    relation_key,
+)
+from dbt_debt.sqlparse import expression_columns
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +30,13 @@ KNOWN_SCHEMA_PREFIX = "https://schemas.getdbt.com/dbt/manifest/v"
 
 
 def load_manifest(path: str | Path) -> Manifest:
-    """Read manifest.json from disk and parse it into a Manifest."""
+    """Read manifest.json from disk and parse it into a Manifest.
 
-    data = json.loads(Path(path).read_text())
-    return parse_manifest(data)
+    Raises `ArtifactError` (with the path in the message) when the file cannot be read or is
+    not valid artifact JSON.
+    """
+
+    return parse_manifest(load_artifact(path))
 
 
 def parse_manifest(data: dict[str, Any]) -> Manifest:
@@ -39,20 +51,33 @@ def parse_manifest(data: dict[str, Any]) -> Manifest:
     relations: dict[str, Relation] = {}
     for unique_id, node in as_dict(data.get("nodes")).items():
         resource_type = node.get("resource_type")
-        if resource_type == "model":
-            models[unique_id] = _parse_model(unique_id, node)
+        if resource_type in ("model", "seed", "snapshot"):
+            models[unique_id] = _parse_model(unique_id, node, resource_type)
         elif resource_type == "test":
             tests[unique_id] = _parse_test(unique_id, node)
-        elif resource_type in ("seed", "snapshot"):
-            relations[unique_id] = _parse_relation(unique_id, node, materialized=True)
 
     for unique_id, node in as_dict(data.get("sources")).items():
-        relations[unique_id] = _parse_relation(unique_id, node, materialized=False)
+        relations[unique_id] = _parse_relation(unique_id, node)
 
     exposures = {
         unique_id: _parse_exposure(unique_id, node)
         for unique_id, node in as_dict(data.get("exposures")).items()
     }
+
+    # The semantic layer's three node kinds (dbt 1.6+, manifest v12 top-level keys). Their
+    # shapes follow the published manifest schema; the parsing stays lenient (`get` everywhere)
+    # since we have not verified them against a populated real-world manifest.
+    semantic_consumers: dict[str, SemanticConsumer] = {}
+    for unique_id, node in as_dict(data.get("semantic_models")).items():
+        semantic_consumers[unique_id] = _parse_semantic_model(unique_id, node)
+    for key, kind in (("metrics", "metric"), ("saved_queries", "saved_query")):
+        for unique_id, node in as_dict(data.get(key)).items():
+            semantic_consumers[unique_id] = SemanticConsumer(
+                unique_id=unique_id,
+                name=node.get("name", ""),
+                kind=kind,
+                depends_on=_depends_on(node),
+            )
 
     return Manifest(
         project_name=str(metadata.get("project_name", "")),
@@ -62,12 +87,14 @@ def parse_manifest(data: dict[str, Any]) -> Manifest:
         tests=tests,
         exposures=exposures,
         relations=relations,
+        semantic_consumers=semantic_consumers,
     )
 
 
-def _parse_model(unique_id: str, node: dict[str, Any]) -> Model:
+def _parse_model(unique_id: str, node: dict[str, Any], resource_type: str = "model") -> Model:
     # Column names are lowercased here (and in the catalog and test parsers) so every layer
-    # compares them the same way, matching the relation_key normalization.
+    # compares them the same way, matching the relation_key normalization. Seeds and snapshots
+    # share the node shape; a seed simply has no compiled_code and no dependencies.
     columns = tuple(name.lower() for name in as_dict(node.get("columns")))
     return Model(
         unique_id=unique_id,
@@ -80,6 +107,7 @@ def _parse_model(unique_id: str, node: dict[str, Any]) -> Model:
         columns=columns,
         contract_enforced=bool(as_dict(node.get("contract")).get("enforced", False)),
         compiled_code=node.get("compiled_code"),
+        resource_type=resource_type,
     )
 
 
@@ -94,22 +122,56 @@ def _parse_test(unique_id: str, node: dict[str, Any]) -> Test:
     )
 
 
-def _parse_relation(unique_id: str, node: dict[str, Any], *, materialized: bool) -> Relation:
-    """Parse a seed/snapshot node or a source into a non-model `Relation`.
+def _parse_relation(unique_id: str, node: dict[str, Any]) -> Relation:
+    """Parse a source into a `Relation`.
 
-    Seeds and snapshots key off `alias` (falling back to `name`); a source keys off `identifier`
-    (falling back to `name`). The relation_key is built the same way as a model's so both sides of
-    the orphan subtraction compare equal.
+    A source keys off `identifier` (falling back to `name`). The relation_key is built the same
+    way as a model's so both sides of the orphan subtraction compare equal.
     """
 
     database = node.get("database")
     schema = node.get("schema")
-    identifier = node.get("alias") or node.get("identifier") or node.get("name")
+    identifier = node.get("identifier") or node.get("name")
     return Relation(
         unique_id=unique_id,
         relation_key=relation_key(database, schema, identifier),
         schema=schema,
-        materialized=materialized,
+    )
+
+
+def _parse_semantic_model(unique_id: str, node: dict[str, Any]) -> SemanticConsumer:
+    """Parse one semantic model, resolving its entity/dimension/measure exprs to column refs.
+
+    Each element's `expr` (falling back to its `name`) names the columns it reads; those are
+    paired with every model the semantic model depends on — usually exactly one. Expressions
+    that fail to parse contribute no refs, which is conservative: the model-grain flag still
+    protects the model itself.
+    """
+
+    depends_on = _depends_on(node)
+    model_deps = tuple(dep for dep in depends_on if dep.startswith("model."))
+    columns: set[str] = set()
+    for section in ("entities", "dimensions", "measures"):
+        elements = node.get(section) or []
+        for element in elements:
+            if not isinstance(element, dict):
+                continue
+            # `expr` may be null (the column is just `name`) or a non-string (e.g. YAML
+            # `expr: true`), in which case the name is the best available column reference.
+            expr = element.get("expr")
+            if not isinstance(expr, str):
+                expr = element.get("name")
+            if isinstance(expr, str):
+                columns.update(expression_columns(expr))
+    column_refs: tuple[ColumnRef, ...] = tuple(
+        sorted((dep, column) for dep in model_deps for column in columns)
+    )
+    return SemanticConsumer(
+        unique_id=unique_id,
+        name=node.get("name", ""),
+        kind="semantic_model",
+        depends_on=depends_on,
+        column_refs=column_refs,
     )
 
 

@@ -32,7 +32,12 @@ def relation_key(database: str | None, schema: str | None, identifier: str | Non
 
 @dataclass
 class Model:
-    """A dbt model: its `.sql` definition and declared metadata.
+    """A buildable dbt node — a model, seed, or snapshot — and its declared metadata.
+
+    All three kinds share the same usage question ("did anything query what this builds?"),
+    so they share one type, told apart by `resource_type`; a seed simply has no SQL and no
+    dependencies. The *model* terminology stays load-bearing at the report surface, where
+    non-model entries are tagged with their kind.
 
     The `relation_key` property is the join key against BigQuery's `referenced_tables` in the
     consumption layer; it is derived from `database`/`schema`/`alias`, so we never parse dbt's
@@ -54,6 +59,7 @@ class Model:
     columns: tuple[str, ...] = ()
     contract_enforced: bool = False
     compiled_code: str | None = None
+    resource_type: str = "model"
 
     @property
     def relation_key(self) -> str:
@@ -135,19 +141,37 @@ class Exposure:
 
 
 @dataclass(frozen=True)
+class SemanticConsumer:
+    """A semantic-layer node — a semantic model, metric, or saved query — that consumes models.
+
+    Like exposures these capture *declared* use: a dead model feeding one is flagged for review
+    rather than removable, and a column a semantic model names is blocked rather than consumed.
+    `depends_on` holds the raw manifest deps (model, semantic-model, or metric unique_ids);
+    `column_refs` is resolved to (model unique_id, column) pairs for semantic models only —
+    metrics and saved queries reference columns indirectly through their semantic models.
+    """
+
+    unique_id: str
+    name: str
+    kind: str
+    """One of "semantic_model", "metric", or "saved_query"."""
+    depends_on: tuple[str, ...] = ()
+    column_refs: tuple[ColumnRef, ...] = ()
+
+
+@dataclass(frozen=True)
 class Relation:
-    """A dbt-defined warehouse relation that is not a model: a seed, snapshot, or source.
+    """A dbt source: a warehouse relation dbt reads but does not build.
 
     Carries only what the orphan check needs — the `relation_key` to subtract from the warehouse
-    inventory, the owning `schema`, and whether dbt *materializes* it. Seeds and snapshots are
-    materialized (dbt writes them), so their dataset is dbt-managed; a source is only read, so its
-    dataset is an external input and not searched for orphans.
+    inventory and the owning `schema`. Sources are only read, so their datasets are external
+    inputs and never searched for orphans. (Seeds and snapshots, which dbt *builds*, live in
+    `Manifest.models` with their `resource_type` tag.)
     """
 
     unique_id: str
     relation_key: str
     schema: str | None
-    materialized: bool
 
 
 @dataclass
@@ -161,6 +185,8 @@ class Manifest:
     tests: dict[str, Test] = field(default_factory=dict)
     exposures: dict[str, Exposure] = field(default_factory=dict)
     relations: dict[str, Relation] = field(default_factory=dict)
+    """Sources only; every buildable node (model, seed, snapshot) lives in `models`."""
+    semantic_consumers: dict[str, SemanticConsumer] = field(default_factory=dict)
 
     def relation_to_id(self) -> dict[str, str]:
         """Reverse map from each model's warehouse `relation_key` to its `unique_id`.
@@ -172,7 +198,7 @@ class Manifest:
         return {model.relation_key: unique_id for unique_id, model in self.models.items()}
 
     def dbt_relation_keys(self) -> set[str]:
-        """Every warehouse relation dbt defines: models plus seeds, snapshots, and sources.
+        """Every warehouse relation dbt defines: models, seeds, snapshots, and sources.
 
         The subtraction set for orphan discovery — a physical table whose key is in here is
         accounted for by dbt and is never an orphan or an undeclared source.
@@ -185,12 +211,11 @@ class Manifest:
     def managed_datasets(self) -> set[str]:
         """Dataset (schema) names dbt materializes into — where orphans are looked for.
 
-        Drawn from models plus materialized relations (seeds, snapshots); source datasets are
-        excluded because dbt only reads them, so unmanaged tables there are not orphans. Quotes are
+        Drawn from the buildable nodes (models, seeds, snapshots); source datasets are excluded
+        because dbt only reads them, so unmanaged tables there are not orphans. Quotes are
         stripped but case is preserved: these name a dataset-qualified `INFORMATION_SCHEMA.TABLES`
         view, and BigQuery dataset ids are case-sensitive.
         """
 
         schemas = {model.schema for model in self.models.values()}
-        schemas |= {r.schema for r in self.relations.values() if r.materialized}
         return {schema.strip(' `"') for schema in schemas if schema}

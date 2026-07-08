@@ -30,6 +30,7 @@ class Config:
     lookback_days: int = 180
     query_comment_pattern: str = DEFAULT_QUERY_COMMENT_PATTERN
     columns: bool = False
+    min_age_days: int = 7
     output_format: str = "text"
     top_n: int = 10
     cache: bool = True

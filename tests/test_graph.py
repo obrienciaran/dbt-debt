@@ -12,14 +12,18 @@ FIXTURE = Path(__file__).parent / "fixtures" / "manifest.json"
 
 STG = "model.jaffle_shop.stg_orders"
 FCT = "model.jaffle_shop.fct_orders"
+SEED = "seed.jaffle_shop.country_codes"
 
 
 def test_descendants_and_ancestors_from_fixture() -> None:
     graph = Graph.from_manifest(load_manifest(FIXTURE))
+    # The seed is a graph node like any model, so the model→seed edge is kept and a queried
+    # mart reaches its seed through ancestors().
+    assert graph.descendants(SEED) == {STG, FCT}
     assert graph.descendants(STG) == {FCT}
-    assert graph.ancestors(FCT) == {STG}
+    assert graph.ancestors(FCT) == {STG, SEED}
     assert graph.descendants(FCT) == set()
-    assert graph.ancestors(STG) == set()
+    assert graph.ancestors(STG) == {SEED}
 
 
 def test_multi_hop_propagation() -> None:

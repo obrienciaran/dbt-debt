@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Set
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TypeVar
@@ -76,6 +78,14 @@ def _usage_from_json(data: list[dict[str, Any]]) -> list[UsageRow]:
     ]
 
 
+def _first_seen_to_json(data: dict[str, datetime]) -> dict[str, str]:
+    return {key: value.isoformat() for key, value in data.items()}
+
+
+def _first_seen_from_json(data: dict[str, str]) -> dict[str, datetime]:
+    return {key: datetime.fromisoformat(value) for key, value in data.items()}
+
+
 def _relations_to_json(rows: list[WarehouseRelation]) -> list[dict[str, Any]]:
     return [{"relation_key": r.relation_key, "relation_type": r.relation_type} for r in rows]
 
@@ -102,8 +112,12 @@ class CachingBigQueryClient:
         self._dir = cache_dir
         self._ttl = ttl
         self._key_parts = dict(key_parts)
-        self._dir.mkdir(parents=True, exist_ok=True)
-        self._prune()
+        self._disabled = False
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            self._prune()
+        except OSError as exc:
+            self._warn_disabled(exc)
 
     def assert_usage_permission(self) -> None:
         """Delegate the preflight; permissions are never cached."""
@@ -118,6 +132,15 @@ class CachingBigQueryClient:
     def query_texts(self) -> list[str]:
         return self._cached(
             "query_texts", {}, self._inner.query_texts, lambda v: v, lambda v: list(v)
+        )
+
+    def relation_first_seen(self) -> dict[str, datetime]:
+        return self._cached(
+            "relation_first_seen",
+            {},
+            self._inner.relation_first_seen,
+            _first_seen_to_json,
+            _first_seen_from_json,
         )
 
     def existing_relations(self, datasets: Set[str]) -> list[WarehouseRelation]:
@@ -143,13 +166,24 @@ class CachingBigQueryClient:
         encode: Callable[[_T], Any],
         decode: Callable[[Any], _T],
     ) -> _T:
+        if self._disabled:
+            return fetch()
         path = self._path(method, extra)
         cached = self._read(path)
         if cached is not None:
             return decode(cached)
         value = fetch()
-        self._write(path, encode(value))
+        try:
+            self._write(path, encode(value))
+        except OSError as exc:
+            self._warn_disabled(exc)
         return value
+
+    def _warn_disabled(self, exc: OSError) -> None:
+        """Mark the cache unusable for this run; a cache that can't write must never kill a scan."""
+
+        self._disabled = True
+        print(f"scan cache disabled ({exc}); querying BigQuery live.", file=sys.stderr)
 
     @staticmethod
     def _load_entry(path: Path) -> tuple[datetime, object] | None:
@@ -173,7 +207,8 @@ class CachingBigQueryClient:
             return None
         created, data = entry
         if datetime.now(timezone.utc) - created > self._ttl:
-            path.unlink(missing_ok=True)
+            with suppress(OSError):
+                path.unlink(missing_ok=True)
             return None
         return data
 

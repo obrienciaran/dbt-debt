@@ -16,6 +16,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "manifest.json"
 
 STG_KEY = "my-gcp-project.jaffle_shop.stg_orders"
 FCT_KEY = "my-gcp-project.jaffle_shop.fct_orders"
+SEED_KEY = "my-gcp-project.jaffle_shop.country_codes"
 TEST_ID = "test.jaffle_shop.not_null_fct_orders_order_id.a1b2c3"
 EXPOSURE_ID = "exposure.jaffle_shop.orders_dashboard"
 
@@ -27,18 +28,22 @@ def _config() -> Config:
 def test_all_dead_yields_removable_tests_and_affected_exposure() -> None:
     manifest = load_manifest(FIXTURE)
     graph = Graph.from_manifest(manifest)
-    storage = {STG_KEY: 1024, FCT_KEY: 2048}
+    storage = {STG_KEY: 1024, FCT_KEY: 2048, SEED_KEY: 512}
     card = build_scorecard(manifest, graph, [], storage, _config())
 
-    assert (card.active_models, card.unused_models) == (0, 2)
-    # Both dead tables' storage is reclaimable (1024 + 2048).
-    assert card.reclaimable_bytes == 3072
+    assert (card.active_models, card.unused_models) == (0, 3)
+    # All three dead relations' storage is reclaimable (1024 + 2048 + 512) — the seed counts.
+    assert card.reclaimable_bytes == 3584
     assert card.removable_tests == (TEST_ID,)
     assert card.unaffected_exposures == ()
-    assert card.affected_exposures == (EXPOSURE_ID,)
-    # Ranked by reclaimable bytes, descending.
-    assert [a.name for a in card.dead_models] == ["fct_orders", "stg_orders"]
+    # Affected exposures carry their name so the report can say which dashboard is at risk.
+    assert [(e.kind, e.name, e.unique_id) for e in card.affected_exposures] == [
+        ("exposure", "orders_dashboard", EXPOSURE_ID)
+    ]
+    # Ranked by reclaimable bytes, descending, with the seed tagged by kind.
+    assert [a.name for a in card.dead_models] == ["fct_orders", "stg_orders", "country_codes"]
     assert card.dead_models[0].total_bytes == 2048
+    assert card.dead_models[2].resource_type == "seed"
 
 
 def test_queried_mart_keeps_everything_active() -> None:
@@ -47,7 +52,8 @@ def test_queried_mart_keeps_everything_active() -> None:
     usage = [UsageRow(relation_key=FCT_KEY, query_count=4)]
     card = build_scorecard(manifest, graph, usage, {}, _config())
 
-    assert (card.active_models, card.unused_models) == (2, 0)
+    # The seed feeding the queried mart stays alive too (the model→seed edge fix).
+    assert (card.active_models, card.unused_models) == (3, 0)
     assert card.removable_tests == ()
     assert card.unaffected_exposures == (EXPOSURE_ID,)
     assert card.dead_models == ()
@@ -71,11 +77,71 @@ def test_test_on_dead_column_counts_as_removable() -> None:
     assert card.removable_tests == (TEST_ID,)
 
 
+def test_too_new_node_is_set_aside_from_every_unused_figure() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    # Nothing queried; fct first appeared two days ago, the others are window-old.
+    first_seen = {
+        FCT_KEY: now - timedelta(days=2),
+        STG_KEY: now - timedelta(days=170),
+        SEED_KEY: now - timedelta(days=170),
+    }
+    storage = {STG_KEY: 1024, FCT_KEY: 2048, SEED_KEY: 512}
+    card = build_scorecard(manifest, graph, [], storage, _config(), first_seen=first_seen, now=now)
+
+    assert [m.name for m in card.too_new_models] == ["fct_orders"]
+    assert (card.active_models, card.unused_models) == (0, 2)
+    # Everything derived from "unused" excludes the too-new node: fct's test is not
+    # removable, the dashboard over fct is not affected, and its bytes are not reclaimable.
+    assert card.removable_tests == ()
+    assert card.affected_exposures == ()
+    assert card.reclaimable_bytes == 1536
+    assert [m.name for m in card.dead_models] == ["stg_orders", "country_codes"]
+
+
+def test_min_age_zero_disables_the_guard() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    first_seen = {FCT_KEY: now - timedelta(days=2)}
+    config = Config(
+        project_dir=FIXTURE.parent.parent, target_path=FIXTURE.parent.name, min_age_days=0
+    )
+    card = build_scorecard(manifest, graph, [], {}, config, first_seen=first_seen, now=now)
+    assert card.too_new_models == ()
+    assert card.unused_models == 3
+
+
+def test_dead_model_flags_its_semantic_consumers() -> None:
+    from dbt_debt.domain import SemanticConsumer
+
+    manifest = load_manifest(FIXTURE)
+    manifest.semantic_consumers["semantic_model.jaffle_shop.orders"] = SemanticConsumer(
+        unique_id="semantic_model.jaffle_shop.orders",
+        name="orders",
+        kind="semantic_model",
+        depends_on=("model.jaffle_shop.fct_orders",),
+    )
+    graph = Graph.from_manifest(manifest)
+    card = build_scorecard(manifest, graph, [], {}, _config())
+    assert [(c.kind, c.name) for c in card.affected_semantic] == [("semantic_model", "orders")]
+
+    # With the mart queried nothing is dead, so nothing is flagged.
+    usage = [UsageRow(relation_key=FCT_KEY, query_count=1)]
+    alive = build_scorecard(manifest, graph, usage, {}, _config())
+    assert alive.affected_semantic == ()
+
+
 def test_scan_orchestration_via_fake_client() -> None:
     client = FakeBigQueryClient(usage=[UsageRow(relation_key=FCT_KEY, query_count=1)])
     card = _scan(_config(), client)
     assert card.project_name == "jaffle_shop"
-    assert (card.active_models, card.unused_models) == (2, 0)
+    assert (card.active_models, card.unused_models) == (3, 0)
 
 
 def test_infer_project_from_model_database() -> None:

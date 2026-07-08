@@ -8,12 +8,22 @@ canned data in tests with no network and no credentials. The real implementation
 from __future__ import annotations
 
 from collections.abc import Set
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from dbt_debt.domain import UsageRow, WarehouseRelation
 
 
-class MissingCredentialsError(RuntimeError):
+class WarehouseError(RuntimeError):
+    """Raised when a warehouse call fails for any reason the scan cannot recover from.
+
+    The base of the warehouse error family: the CLI catches this one type and exits with the
+    warehouse status code, so a mid-scan API failure (bad region, transient outage, quota) ends
+    with a readable message instead of a traceback.
+    """
+
+
+class MissingCredentialsError(WarehouseError):
     """Raised when no Google credentials can be found at all.
 
     Distinct from `MissingPermissionError`: here the caller is not signed in, rather than signed
@@ -21,7 +31,7 @@ class MissingCredentialsError(RuntimeError):
     """
 
 
-class MissingPermissionError(RuntimeError):
+class MissingPermissionError(WarehouseError):
     """Raised when the caller cannot see every user's jobs.
 
     Without `bigquery.jobs.listAll` a caller silently sees only their own jobs, so every
@@ -44,6 +54,10 @@ class BigQueryClient(Protocol):
 
     def query_texts(self) -> list[str]:
         """Distinct user-query SQL within the window, for column-level usage parsing."""
+        ...
+
+    def relation_first_seen(self) -> dict[str, datetime]:
+        """Earliest job per relation in the window (all statement types), for the too-new guard."""
         ...
 
     def existing_relations(self, datasets: Set[str]) -> list[WarehouseRelation]:

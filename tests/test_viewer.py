@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import pytest
+
 from dbt_debt.cli import _should_view
 from dbt_debt.config import Config
 from dbt_debt.report.scorecard import ColumnReport, DeadColumn, Scorecard
@@ -71,6 +73,27 @@ def test_export_pane_prompts_then_confirms() -> None:
     assert not any("wrote report" in line for line in before)
     after = export_pane('{"x": 1}', written_to="/tmp/debt.json")
     assert any("wrote report to /tmp/debt.json" in line for line in after)
+
+
+def test_export_pane_shows_a_write_error() -> None:
+    pane = export_pane('{"x": 1}', written_to=None, error="Permission denied")
+    assert any("could not write the report: Permission denied" in line for line in pane)
+
+
+def test_loop_survives_a_failing_export_write(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A read-only cwd must not crash the viewer: the error lands in the export pane and the
+    # loop keeps running until quit.
+    from dbt_debt.report import viewer
+
+    def _refuse(json_text: str, filename: str = viewer.EXPORT_FILE) -> str:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(viewer, "write_report", _refuse)
+    keys = iter(["4", "enter", "quit"])
+    viewer._loop([("Summary", ["ok"])], "{}", lambda: next(keys))
+    assert "could not write the report" in capsys.readouterr().out
 
 
 def test_write_report_writes_file_with_newline(tmp_path: Path) -> None:

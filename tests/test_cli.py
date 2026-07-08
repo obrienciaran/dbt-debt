@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any
+
 import pytest
 
-from dbt_debt.cli import _build_parser, _config_from_args, main
+from dbt_debt import cli
+from dbt_debt.cli import _build_parser, _config_from_args, _emit, main
+from dbt_debt.consumption.client import WarehouseError
+
+_METADATA = {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+    "project_name": "p",
+}
+
+
+def _write_manifest(tmp_path: Path, nodes: dict[str, Any]) -> None:
+    target = tmp_path / "target"
+    target.mkdir(exist_ok=True)
+    (target / "manifest.json").write_text(json.dumps({"metadata": _METADATA, "nodes": nodes}))
 
 
 def test_top_level_clear_cache_survives_the_scan_subcommand() -> None:
@@ -27,6 +44,30 @@ def test_top_n_reaches_the_config() -> None:
     assert _config_from_args(args).top_n == 3
 
 
+def test_min_age_days_reaches_the_config() -> None:
+    args = _build_parser().parse_args(["scan", "--min-age-days", "14"])
+    assert _config_from_args(args).min_age_days == 14
+    assert _config_from_args(_build_parser().parse_args(["scan"])).min_age_days == 7
+
+
+def test_min_age_zero_skips_the_first_seen_call() -> None:
+    from dbt_debt.cli import _scan
+    from dbt_debt.config import Config
+    from tests.fakes import FakeBigQueryClient
+
+    fixture_dir = Path(__file__).parent / "fixtures"
+    client = FakeBigQueryClient()
+    config = Config(
+        project_dir=fixture_dir.parent, target_path=Path(fixture_dir.name), min_age_days=0
+    )
+    _scan(config, client)
+    assert client.calls["relation_first_seen"] == 0
+
+    with_guard = Config(project_dir=fixture_dir.parent, target_path=Path(fixture_dir.name))
+    _scan(with_guard, client)
+    assert client.calls["relation_first_seen"] == 1
+
+
 def test_invalid_query_comment_pattern_exits_cleanly(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -34,3 +75,90 @@ def test_invalid_query_comment_pattern_exits_cleanly(
     # instead of a confusing BigQuery syntax error mid-scan.
     assert main(["scan", "--query-comment-pattern", "bad'''pattern"]) == 2
     assert "query-comment-pattern" in capsys.readouterr().err
+
+
+def test_lookback_days_must_be_positive(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["scan", "--lookback-days", "0"]) == 2
+    assert "--lookback-days" in capsys.readouterr().err
+
+
+def test_malformed_manifest_exits_two_with_the_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "manifest.json").write_text("{ truncated")
+    assert main(["scan", "--project-dir", str(tmp_path)]) == 2
+    assert "not valid JSON" in capsys.readouterr().err
+
+
+def test_manifest_without_models_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # An empty scorecard is nearly always a wrong --project-dir, so say so instead of
+    # printing all zeros.
+    _write_manifest(tmp_path, nodes={})
+    assert main(["scan", "--project-dir", str(tmp_path)]) == 2
+    assert "has no models" in capsys.readouterr().err
+
+
+def test_warehouse_error_mid_scan_exits_three(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_manifest(
+        tmp_path,
+        nodes={
+            "model.p.m": {
+                "resource_type": "model",
+                "name": "m",
+                "database": "proj",
+                "schema": "mart",
+                "alias": "m",
+            }
+        },
+    )
+
+    class _MidScanFailure:
+        def __init__(self, config: Any, project: str | None = None) -> None:
+            pass
+
+        def assert_usage_permission(self) -> None:
+            raise WarehouseError("BigQuery query for job history failed: boom")
+
+    monkeypatch.setattr("dbt_debt.consumption.bigquery.RealBigQueryClient", _MidScanFailure)
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache"]) == 3
+    assert "job history" in capsys.readouterr().err
+
+
+def test_keyboard_interrupt_exits_130(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _interrupted(args: object) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_run_scan", _interrupted)
+    assert main(["scan"]) == 130
+    assert "interrupted" in capsys.readouterr().err
+
+
+def test_malformed_catalog_degrades_to_no_catalog(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The catalog only feeds sizes and the column stage, so a damaged one degrades exactly
+    # like a missing one instead of failing the scan.
+    from dbt_debt.cli import _load_catalog
+    from dbt_debt.config import Config
+
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "catalog.json").write_text("garbage")
+    assert _load_catalog(Config(project_dir=tmp_path)) is None
+    assert "Continuing without catalog" in capsys.readouterr().err
+
+
+def test_emit_reports_unwritable_output_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Writing to a directory fails with OSError; the CLI must turn that into exit 2.
+    assert _emit("report", str(tmp_path)) == 2
+    assert "cannot write report" in capsys.readouterr().err

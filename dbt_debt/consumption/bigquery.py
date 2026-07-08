@@ -7,11 +7,17 @@ any credentials.
 
 from __future__ import annotations
 
-from collections.abc import Set
+from collections.abc import Iterator, Set
+from datetime import datetime
+from typing import Any
 
 from dbt_debt.config import Config
 from dbt_debt.consumption import jobs
-from dbt_debt.consumption.client import MissingCredentialsError, MissingPermissionError
+from dbt_debt.consumption.client import (
+    MissingCredentialsError,
+    MissingPermissionError,
+    WarehouseError,
+)
 from dbt_debt.consumption.exclusion import exclusion_clause
 from dbt_debt.domain import UsageRow, WarehouseRelation
 
@@ -42,7 +48,7 @@ class RealBigQueryClient:
         in the Resource Manager dependency.
         """
 
-        from google.api_core.exceptions import Forbidden
+        from google.api_core.exceptions import Forbidden, GoogleAPIError
 
         try:
             next(iter(self._bq.list_jobs(all_users=True, max_results=1)), None)
@@ -52,16 +58,22 @@ class RealBigQueryClient:
                 "roles/bigquery.resourceViewer). Without it 'unused' counts only your own "
                 "queries and would be false-confident."
             ) from exc
+        except GoogleAPIError as exc:
+            raise WarehouseError(f"BigQuery job listing failed: {exc}") from exc
 
     def table_usage(self) -> list[UsageRow]:
         clause = exclusion_clause(self._config.query_comment_pattern)
         sql = jobs.table_usage_query(self._config.region, self._config.lookback_days, clause)
-        return jobs.parse_usage_rows(self._bq.query(sql).result())
+        return jobs.parse_usage_rows(self._run(sql, "job history"))
 
     def query_texts(self) -> list[str]:
         clause = exclusion_clause(self._config.query_comment_pattern)
         sql = jobs.query_text_query(self._config.region, self._config.lookback_days, clause)
-        return jobs.parse_query_text_rows(self._bq.query(sql).result())
+        return jobs.parse_query_text_rows(self._run(sql, "query text"))
+
+    def relation_first_seen(self) -> dict[str, datetime]:
+        sql = jobs.first_seen_query(self._config.region, self._config.lookback_days)
+        return jobs.parse_first_seen_rows(self._run(sql, "relation ages"))
 
     def existing_relations(self, datasets: Set[str]) -> list[WarehouseRelation]:
         if not datasets:
@@ -70,7 +82,7 @@ class RealBigQueryClient:
 
         sql = jobs.existing_relations_query(self._bq.project, datasets)
         try:
-            rows = self._bq.query(sql).result()
+            rows = self._run(sql, "warehouse table listing")
         except Forbidden as exc:
             raise MissingPermissionError(
                 "Cannot read table metadata for the managed datasets (need read access, e.g. "
@@ -78,3 +90,21 @@ class RealBigQueryClient:
                 "is skipped; undeclared sources are still reported from the manifest."
             ) from exc
         return jobs.parse_relation_rows(rows)
+
+    def _run(self, sql: str, stage: str) -> Iterator[Any]:
+        """Run one query, translating any API failure into a readable `WarehouseError`.
+
+        `Forbidden` passes through untouched so the callers that give it a sharper meaning
+        (the managed-dataset listing) can still catch it.
+        """
+
+        from google.api_core.exceptions import Forbidden, GoogleAPIError
+
+        try:
+            return iter(self._bq.query(sql).result())
+        except Forbidden:
+            raise
+        except GoogleAPIError as exc:
+            raise WarehouseError(
+                f"BigQuery query for {stage} failed: {exc} — check --region and --project."
+            ) from exc

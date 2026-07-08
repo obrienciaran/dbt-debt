@@ -9,12 +9,11 @@ Read as plain JSON, like the manifest — no dbt import.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dbt_debt.artifacts._json import as_dict
+from dbt_debt.artifacts._json import as_dict, load_artifact
 from dbt_debt.domain import relation_key
 
 
@@ -47,9 +46,13 @@ class Catalog:
 
 
 def load_catalog(path: str | Path) -> Catalog:
-    """Read catalog.json from disk and parse it into a Catalog."""
+    """Read catalog.json from disk and parse it into a Catalog.
 
-    return parse_catalog(json.loads(Path(path).read_text()))
+    Raises `ArtifactError` (with the path in the message) when the file cannot be read or is
+    not valid artifact JSON.
+    """
+
+    return parse_catalog(load_artifact(path))
 
 
 def parse_catalog(data: dict[str, Any]) -> Catalog:

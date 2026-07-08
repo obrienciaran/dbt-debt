@@ -25,15 +25,16 @@ dbt_debt/
   references.py          # which warehouse tables each model reads, used for finding orphans
 
   artifacts/             # read dbt's own files into our data classes (plain JSON; dbt is never imported)
-    manifest.py          #   manifest.json -> models, tests, exposures, dependencies, SQL
+    manifest.py          #   manifest.json -> models/seeds/snapshots, tests, exposures, semantic layer, SQL
     catalog.py           #   catalog.json -> the full column list and table sizes
-    graph.py             #   the map of which model depends on which: descendants() / ancestors()
+    graph.py             #   the map of which buildable node depends on which: descendants() / ancestors()
+    errors.py            #   ArtifactError: a broken artifact fails with the path, not a traceback
 
   consumption/           # ask BigQuery what was actually used
     client.py            # the shared interface the rest of the code talks to (so it can be faked in tests)
     bigquery.py          # the real BigQuery version (the only file that needs the BigQuery library)
     cache.py             # an optional saved-results layer that wraps any client (same interface)
-    jobs.py              # the queries against BigQuery's query log and table list, plus their parsers
+    jobs.py              # the queries against BigQuery's query log, table list, and first-seen dates
     exclusion.py         # the filter that throws out dbt's own queries
     usage.py             # turn "these tables were used" into "these models were used"
     columns.py           # turn query text into the (model, column) pairs that were actually read
@@ -44,11 +45,12 @@ dbt_debt/
     fusion_source.py †   # an optional faster source from dbt Fusion (experimental, needs a login)
 
   verdict/               # working-out only: given the data, decide what's unused
-    models.py            # a model is unused if it, and everything built from it, went unqueried
+    models.py            # a node is unused if it, and everything built from it, went unqueried
     columns.py           # a column is unused if it's not read and feeds nothing that's read
     orphans.py           # an orphan is a table in a dbt dataset with no dbt model behind it
+    freshness.py         # the too-new guard: first seen recently means "too new to judge", not unused
+    semantic.py          # which semantic models / metrics / saved queries a dead model feeds
     tests.py / exposures.py / blockers.py   # checks that only need dbt's own files
-    scoring.py †         # a 0-10 debt score with medals (like dbt-score)
 
   report/
     scorecard.py         # put the result together
@@ -154,6 +156,58 @@ too, so a seed sitting next to your models is never flagged.)
 BigQuery, what the models read, and what dbt knows about. The reading and the BigQuery call happen
 before it, and if the table-list access is missing the tool falls back to "undeclared sources only"
 rather than failing the scan.
+
+## Seeds, snapshots, and the semantic layer
+
+dbt builds three kinds of table — models, seeds, snapshots — and they all face the same
+question: did anything query what this builds? So all three live in `Manifest.models`, told
+apart by a `resource_type` tag (a seed simply has no SQL and no dependencies), and everything
+downstream works unchanged: usage rows join to seeds, the dependency graph keeps model→seed
+edges (so a queried mart keeps the seed it descends from alive), and a dead seed ranks by its
+catalog bytes like any dead model. `Manifest.relations` now holds sources only.
+
+The semantic layer (semantic models, metrics, saved queries — dbt 1.6+) is treated like
+exposures: *declared* use, not observed use. A dead model that feeds a semantic model — or,
+through it, a metric or saved query — is flagged for review, never revived; a dead column that
+a semantic model names in an entity/dimension/measure `expr` is *blocked*, not consumed
+(`verdict/semantic.py` and the blocker check). Real semantic-layer queries hit BigQuery and
+count as observed usage anyway. Two things here are inference, flagged per our rule: the
+semantic-node shapes are parsed from the published v12 manifest schema, not yet checked against
+a populated real-world manifest (the parser stays lenient), and expression parsing falls back
+to "no column refs" when sqlglot can't read an expr.
+
+## Too new to judge
+
+A model created a few days ago has had no fair chance to be queried, so calling it "unused"
+would be false-confident. Its creation date is taken as its **first appearance in the job
+history** — `MIN(creation_time)` per relation over *all* jobs in the window, dbt's own builds
+included, unioned across `referenced_tables` and `destination_table`. An old model rebuilt
+nightly has jobs throughout the window (judged normally); a new one first appears when it was
+created. We rejected the two obvious alternatives: the manifest's `created_at` is just parse
+time, and `INFORMATION_SCHEMA.TABLES.creation_time` resets on every `dbt run` (tables and views
+are dropped and recreated) and lives on the permission-fragile orphan path. First-seen instead
+rides on `JOBS_BY_PROJECT` — the one grant already hard-required — so there is no new
+degradation mode. (Inference to confirm live: that CTAS/dbt builds populate
+`destination_table`; it is standard JOBS-schema behaviour, which is why the query unions it in.)
+
+A dead node first seen younger than `--min-age-days` (default 7; `0` disables) becomes a third
+bucket — "too new to judge" — listed separately and excluded from the unused count and from
+everything derived from it: removable tests, exposure and semantic impact, reclaimable bytes.
+A node never seen at all is judged normally, since no job in the whole window is the strongest
+"unused" signal there is.
+
+## Failing without tracebacks
+
+Exit codes are a contract: `0` the scan completed (including degraded scans — no catalog,
+orphans skipped), `2` a local problem (bad arguments, missing or malformed artifacts), `3` any
+warehouse problem, `130` interrupted. Behind it sits a small error family: every warehouse
+failure is a `WarehouseError` (credentials and permissions are subclasses, and any other
+BigQuery API error is translated in `bigquery.py`, still the only file that touches google
+exceptions), and every unreadable artifact is an `ArtifactError` carrying its path. A malformed
+manifest is fatal; a malformed catalog degrades exactly like a missing one. The cache fails
+open (a cache directory that can't be written disables the cache with a warning, never the
+scan), the viewer renders an export failure into its pane and treats Ctrl-C as quit, and an
+unwritable `--output` path is a clean exit 2.
 
 ## The spinner and the saved-results cache
 

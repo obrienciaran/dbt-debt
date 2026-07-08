@@ -31,7 +31,8 @@ def _plural(count: int, noun: str) -> str:
 
 
 _BLOCKED_LEGEND = (
-    "  (blocked = unused but still backed by a test or enforced contract; review before removing)"
+    "  (blocked = unused but still backed by a test, enforced contract, or semantic model; "
+    "review before removing)"
 )
 
 
@@ -48,8 +49,13 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
         "",
         "Models:",
         f"  ✓ {scorecard.active_models} active",
-        f"  ✗ {scorecard.unused_models} unused",
+        f"  ✗ {scorecard.unused_models} unused{_dead_kind_breakdown(scorecard.dead_models)}",
     ]
+    if scorecard.too_new_models:
+        lines.append(
+            f"  ? {len(scorecard.too_new_models)} too new to judge "
+            "(first seen recently; not counted as unused)"
+        )
     if columns is not None:
         lines += [
             "Columns:",
@@ -71,6 +77,16 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
             f"  ! {_plural(len(scorecard.affected_exposures), 'exposure')} affected "
             "(review before removing)"
         )
+        lines += [f"      - {e.name}" for e in scorecard.affected_exposures]
+    if scorecard.affected_semantic:
+        lines.append(
+            f"  ! {_plural(len(scorecard.affected_semantic), 'semantic-layer consumer')} "
+            "affected (review before removing)"
+        )
+        lines += [
+            f"      - {c.name} ({_CONSUMER_LABELS.get(c.kind, c.kind)})"
+            for c in scorecard.affected_semantic
+        ]
     if scorecard.reclaimable_bytes > 0:
         lines.append(f"  - {humanize_bytes(scorecard.reclaimable_bytes)} reclaimable storage")
 
@@ -110,6 +126,11 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
     """
 
     lines = _detail_models(scorecard.dead_models)
+    if scorecard.too_new_models:
+        lines += ["", f"Too new to judge ({len(scorecard.too_new_models)}):"]
+        for model in scorecard.too_new_models:
+            path = f"  {model.file_path}" if model.file_path else ""
+            lines.append(f"  - {model.name}{_kind_tag(model)}{path}")
     columns = scorecard.columns
     if columns is not None:
         lines += _detail_columns(columns.dead_columns)
@@ -193,14 +214,37 @@ def _detail_models(dead_models: tuple[DeadModel, ...]) -> list[str]:
     for model in dead_models:
         size = f"  {humanize_bytes(model.total_bytes)}" if model.total_bytes > 0 else ""
         path = f"  {model.file_path}" if model.file_path else ""
-        lines.append(f"  - {model.name}{size}{path}")
+        lines.append(f"  - {model.name}{_kind_tag(model)}{size}{path}")
     return lines
 
 
+def _kind_tag(model: DeadModel) -> str:
+    """A ` (seed)` / ` (snapshot)` label; plain models carry no tag."""
+
+    return f" ({model.resource_type})" if model.resource_type != "model" else ""
+
+
+_CONSUMER_LABELS = {
+    "semantic_model": "semantic model",
+    "metric": "metric",
+    "saved_query": "saved query",
+}
+
+
+def _dead_kind_breakdown(dead_models: tuple[DeadModel, ...]) -> str:
+    """A ` (incl. 2 seeds, 1 snapshot)` suffix when non-model nodes are among the dead."""
+
+    parts = [
+        _plural(count, kind)
+        for kind in ("seed", "snapshot")
+        if (count := sum(1 for m in dead_models if m.resource_type == kind))
+    ]
+    return f" (incl. {', '.join(parts)})" if parts else ""
+
+
 def _format_model(model: DeadModel) -> str:
-    if model.total_bytes > 0:
-        return f"{model.name} ({humanize_bytes(model.total_bytes)})"
-    return model.name
+    size = f" ({humanize_bytes(model.total_bytes)})" if model.total_bytes > 0 else ""
+    return f"{model.name}{_kind_tag(model)}{size}"
 
 
 def _format_column(column: DeadColumn) -> str:

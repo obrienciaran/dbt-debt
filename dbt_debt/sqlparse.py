@@ -109,6 +109,25 @@ def referenced_relations(sql: str, dialect: str = "bigquery") -> set[str]:
     return keys
 
 
+def expression_columns(expr: str, dialect: str = "bigquery") -> tuple[str, ...]:
+    """The column names a bare SQL expression reads, lowercased and sorted.
+
+    Used to resolve a semantic model's dimension/measure `expr` (e.g. a CASE over a status
+    column) to the columns it depends on. There is no FROM clause to qualify against, so the
+    names come back unresolved; the caller pairs them with the semantic model's own model deps.
+    Unparseable input returns `()` — conservative, since the model-grain flag still protects
+    the model itself.
+    """
+
+    try:
+        expression = sqlglot.parse_one(expr, dialect=dialect)
+    except SqlglotError:
+        return ()
+    if expression is None:
+        return ()
+    return tuple(sorted({column.name.lower() for column in expression.find_all(exp.Column)}))
+
+
 def _qualify(sql: str, schema: Schema, dialect: str) -> exp.Expression:
     # sqlglot types parse_one/qualify as the base `Expr`, but the runtime object is the
     # `Expression` that `traverse_scope` consumes.

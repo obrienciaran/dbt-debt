@@ -12,10 +12,11 @@ from dbt_debt.domain import Manifest
 
 
 class Graph:
-    """Directed dependency graph of model unique_ids built from `depends_on` edges.
+    """Directed dependency graph of buildable-node unique_ids built from `depends_on` edges.
 
-    Only edges between models are kept; dependencies on sources, seeds, or snapshots are
-    ignored here because model-usage propagation runs over the model DAG.
+    Covers every node in `Manifest.models` — models, seeds, and snapshots — so a queried mart
+    keeps the seed it descends from alive. Dependencies on sources are ignored because usage
+    propagation only runs over what dbt builds.
     """
 
     def __init__(self, parents: dict[str, set[str]], children: dict[str, set[str]]) -> None:

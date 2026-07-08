@@ -65,6 +65,12 @@ A few cases to keep in mind:
 - **Anything used less often than the lookback window.** The default 180 days is also the max, since
   that's all BigQuery keeps — raising `--lookback-days` won't help. A report that runs once a year
   can look unused, so those need a human call.
+- **Anything created recently.** A table that first appeared in the query log fewer than 7 days ago
+  (`--min-age-days`) hasn't had a fair chance to be queried, so it's reported as "too new to judge"
+  instead of unused, and left out of the removable-test and reclaimable-storage figures.
+- **Semantic-layer declarations.** Models feeding a semantic model, metric, or saved query are
+  flagged for review when unused (like exposures), and columns a semantic model names are marked
+  blocked, never removable.
 - **`SELECT *`** is handled carefully: every column counts as used, so a column read only through a
   `*` is never wrongly called unused.
 
@@ -125,6 +131,8 @@ dbt-debt scan
     --lookback-days 180       how far back to look; 180 is also the max BigQuery keeps
     --query-comment-pattern   how to recognise dbt's own queries (a regex)
     --columns                 also check which columns are unused (default: models only)
+    --min-age-days 7          tables first seen in the query log more recently than this are
+                              "too new to judge", not unused (0 disables the guard)
     --top-n 10                how many unused assets the summary list shows
     --detail                  list every unused table and column (grouped by model, with file paths)
     --format text|json        json always includes the full list
@@ -136,8 +144,10 @@ dbt-debt scan
     --clear-cache             clear this project's saved results, then run a fresh scan
 ```
 
-Exit codes: `0` all good, `2` couldn't find the dbt files (or an option was invalid), `3` not
-signed in to Google Cloud or missing the required permission.
+Exit codes: `0` the scan completed (including degraded scans — say, orphans skipped for lack of
+access); `2` a local problem (a missing or malformed manifest/catalog, an invalid option, an
+unwritable output path); `3` a warehouse problem (not signed in, missing the required
+permission, or any BigQuery error mid-scan); `130` interrupted with Ctrl-C.
 
 ## 🛠️ Working on dbt-debt
 

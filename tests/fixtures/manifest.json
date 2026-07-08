@@ -12,7 +12,7 @@
       "schema": "jaffle_shop",
       "alias": "stg_orders",
       "relation_name": "`my-gcp-project`.`jaffle_shop`.`stg_orders`",
-      "depends_on": {"nodes": [], "macros": []},
+      "depends_on": {"nodes": ["seed.jaffle_shop.country_codes"], "macros": []},
       "columns": {
         "order_id": {"name": "order_id", "description": "primary key", "data_type": "INT64"}
       },

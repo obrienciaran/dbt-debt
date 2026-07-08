@@ -10,16 +10,18 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 from dbt_debt.artifacts.catalog import Catalog, load_catalog
+from dbt_debt.artifacts.errors import ArtifactError
 from dbt_debt.artifacts.graph import Graph
 from dbt_debt.artifacts.manifest import load_manifest
 from dbt_debt.config import DEFAULT_QUERY_COMMENT_PATTERN, Config
 from dbt_debt.consumption.client import (
     BigQueryClient,
-    MissingCredentialsError,
     MissingPermissionError,
+    WarehouseError,
 )
 from dbt_debt.consumption.columns import consumed_model_columns
 from dbt_debt.consumption.exclusion import validate_query_comment_pattern
@@ -52,7 +54,7 @@ def _scan(config: Config, client: BigQueryClient, manifest: Manifest | None = No
     graph = Graph.from_manifest(manifest)
     with status("Querying job history"):
         usage = client.table_usage()
-    catalog = load_catalog(config.catalog_path) if config.catalog_path.exists() else None
+    catalog = _load_catalog(config)
     storage = _storage_bytes(catalog)
     with status("Analysing column usage"):
         column_report = _column_report(config, client, manifest, catalog, storage)
@@ -60,7 +62,29 @@ def _scan(config: Config, client: BigQueryClient, manifest: Manifest | None = No
     with status("Listing warehouse relations"):
         existing = _existing_relations(client, manifest)
     orphan_report = build_orphan_report(manifest, existing, references)
-    return build_scorecard(manifest, graph, usage, storage, config, column_report, orphan_report)
+    first_seen: dict[str, datetime] = {}
+    if config.min_age_days > 0:
+        with status("Checking relation ages"):
+            first_seen = client.relation_first_seen()
+    return build_scorecard(
+        manifest, graph, usage, storage, config, column_report, orphan_report, first_seen
+    )
+
+
+def _load_catalog(config: Config) -> Catalog | None:
+    """Load catalog.json when present and readable; None (with a warning) otherwise.
+
+    A malformed catalog degrades exactly like a missing one — sizes go blank and the column
+    stage is skipped — because the scan's core verdicts never depend on it.
+    """
+
+    if not config.catalog_path.exists():
+        return None
+    try:
+        return load_catalog(config.catalog_path)
+    except ArtifactError as exc:
+        print(f"{exc} Continuing without catalog data.", file=sys.stderr)
+        return None
 
 
 def _storage_bytes(catalog: Catalog | None) -> dict[str, int]:
@@ -166,14 +190,22 @@ def _render_orphans(scorecard: Scorecard, config: Config) -> str:
     return render_orphans_text(scorecard)
 
 
-def _emit(text: str, output: str | None) -> None:
-    """Write the rendered report to a file when `--output` is set, else to stdout."""
+def _emit(text: str, output: str | None) -> int:
+    """Write the rendered report to a file when `--output` is set, else to stdout.
+
+    Returns the exit code: 0 on success, 2 when the output path cannot be written.
+    """
 
     if output is None:
         print(text)
-        return
-    Path(output).write_text(text + "\n")
+        return 0
+    try:
+        Path(output).write_text(text + "\n")
+    except OSError as exc:
+        print(f"cannot write report to {output}: {exc}", file=sys.stderr)
+        return 2
     print(f"wrote report to {output}", file=sys.stderr)
+    return 0
 
 
 def _config_from_args(args: argparse.Namespace) -> Config:
@@ -185,6 +217,7 @@ def _config_from_args(args: argparse.Namespace) -> Config:
         lookback_days=args.lookback_days,
         query_comment_pattern=args.query_comment_pattern,
         columns=args.columns,
+        min_age_days=args.min_age_days,
         output_format=args.format,
         top_n=args.top_n,
         cache=args.cache,
@@ -199,6 +232,9 @@ def _run_scan(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if config.lookback_days < 1:
+        print("--lookback-days must be at least 1.", file=sys.stderr)
+        return 2
     if args.clear_cache:
         _clear_project_cache(config.project_dir)
     if not config.manifest_path.exists():
@@ -211,26 +247,35 @@ def _run_scan(args: argparse.Namespace) -> int:
 
     from dbt_debt.consumption.bigquery import RealBigQueryClient
 
-    manifest = load_manifest(config.manifest_path)
+    try:
+        manifest = load_manifest(config.manifest_path)
+    except ArtifactError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if not manifest.models:
+        print(
+            f"manifest at {config.manifest_path} has no models — is {config.project_dir} "
+            "a dbt project? (run `dbt parse` inside it, or pass --project-dir).",
+            file=sys.stderr,
+        )
+        return 2
     project = config.project or _infer_project(manifest)
     try:
         client: BigQueryClient = RealBigQueryClient(config, project=project)
         client = _wrap_cache(client, config, project)
         scorecard = _scan(config, client, manifest)
-    except (MissingCredentialsError, MissingPermissionError) as exc:
+    except WarehouseError as exc:
         print(str(exc), file=sys.stderr)
         return 3
 
     if args.orphans:
-        _emit(_render_orphans(scorecard, config), args.output)
-        return 0
+        return _emit(_render_orphans(scorecard, config), args.output)
     if _should_view(config, args):
         from dbt_debt.report.viewer import run_viewer
 
         if run_viewer(scorecard, config):
             return 0
-    _emit(_render(scorecard, config, args.detail), args.output)
-    return 0
+    return _emit(_render(scorecard, config, args.detail), args.output)
 
 
 def _clear_project_cache(project_dir: Path) -> None:
@@ -340,6 +385,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Analyse columns too (which are unused), not just whole models.",
     )
+    scan.add_argument(
+        "--min-age-days",
+        type=int,
+        default=7,
+        help="Relations first seen fewer than this many days ago are reported as too new to "
+        "judge rather than unused (default: 7; 0 disables the guard).",
+    )
     scan.add_argument("--format", choices=["text", "json"], default="text")
     scan.add_argument(
         "--top-n",
@@ -399,7 +451,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         parser.print_help(sys.stderr)
         return 2
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except KeyboardInterrupt:
+        # The spinner clears its own line and the viewer restores the terminal on unwind,
+        # so a plain message and the shell's interrupt code are all that's left to do.
+        print("interrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

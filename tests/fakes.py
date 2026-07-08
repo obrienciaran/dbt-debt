@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Set
+from collections.abc import Iterable, Mapping, Set
+from datetime import datetime
 
 from dbt_debt.consumption.client import MissingPermissionError
 from dbt_debt.domain import UsageRow, WarehouseRelation
@@ -23,12 +24,14 @@ class FakeBigQueryClient:
         permitted: bool = True,
         existing: Iterable[WarehouseRelation] = (),
         orphans_permitted: bool = True,
+        first_seen: Mapping[str, datetime] | None = None,
     ) -> None:
         self._usage = list(usage)
         self._query_texts = list(query_texts)
         self._permitted = permitted
         self._existing = list(existing)
         self._orphans_permitted = orphans_permitted
+        self._first_seen = dict(first_seen or {})
         self.calls: Counter[str] = Counter()
 
     def assert_usage_permission(self) -> None:
@@ -43,6 +46,10 @@ class FakeBigQueryClient:
     def query_texts(self) -> list[str]:
         self.calls["query_texts"] += 1
         return list(self._query_texts)
+
+    def relation_first_seen(self) -> dict[str, datetime]:
+        self.calls["relation_first_seen"] += 1
+        return dict(self._first_seen)
 
     def existing_relations(self, datasets: Set[str]) -> list[WarehouseRelation]:
         self.calls["existing_relations"] += 1

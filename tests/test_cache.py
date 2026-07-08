@@ -171,6 +171,35 @@ def test_no_command_without_clear_cache_returns_two() -> None:
     assert cli.main([]) == 2
 
 
+def test_first_seen_round_trips_through_the_cache(tmp_path: Path) -> None:
+    when = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    inner = FakeBigQueryClient(first_seen={"p.d.t": when})
+    client = _client(inner, tmp_path)
+    assert client.relation_first_seen() == {"p.d.t": when}
+    # Second call is served from disk with the datetime intact.
+    assert client.relation_first_seen() == {"p.d.t": when}
+    assert inner.calls["relation_first_seen"] == 1
+
+
+def test_unwritable_cache_dir_fails_open(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A cache that cannot be created must never kill the scan: it disables itself with a
+    # warning and every call goes straight to the inner client.
+    parent = tmp_path / "readonly"
+    parent.mkdir()
+    parent.chmod(0o500)
+    try:
+        inner = FakeBigQueryClient(usage=[UsageRow("a.b.c", 3)])
+        client = _client(inner, parent / "cache")
+        assert client.table_usage() == [UsageRow("a.b.c", 3)]
+        assert client.table_usage() == [UsageRow("a.b.c", 3)]
+        assert inner.calls["table_usage"] == 2
+        assert "scan cache disabled" in capsys.readouterr().err
+    finally:
+        parent.chmod(0o700)
+
+
 def test_usage_round_trip_preserves_last_queried() -> None:
     when = datetime(2026, 6, 1, 12, 30, tzinfo=timezone.utc)
     rows = [UsageRow("a.b.c", 3, when), UsageRow("d.e.f", 1, None)]

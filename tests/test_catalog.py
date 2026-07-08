@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from dbt_debt.artifacts.catalog import load_catalog, parse_catalog
+from dbt_debt.artifacts.errors import ArtifactError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.json"
 
@@ -48,3 +51,10 @@ def test_column_names_are_lowercased() -> None:
         }
     }
     assert parse_catalog(data).model_columns("model.p.m") == ("userid", "amount")
+
+
+def test_malformed_catalog_raises_artifact_error_with_the_path(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.json"
+    path.write_text("not json at all")
+    with pytest.raises(ArtifactError, match=str(path)):
+        load_catalog(path)

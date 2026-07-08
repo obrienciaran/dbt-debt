@@ -13,6 +13,7 @@ from dbt_debt.sqlparse import (
     build_schema,
     column_lineage_edges,
     columns_read,
+    expression_columns,
     referenced_relations,
 )
 
@@ -51,6 +52,20 @@ def test_select_star_expands_conservatively() -> None:
 def test_unparseable_sql_raises() -> None:
     with pytest.raises(SqlParseError):
         columns_read("this is not sql ((", SCHEMA)
+
+
+def test_expression_columns_on_a_bare_identifier() -> None:
+    # A semantic-model element with no expr uses its name; a bare name is itself a column.
+    assert expression_columns("order_id") == ("order_id",)
+
+
+def test_expression_columns_reads_through_an_expression() -> None:
+    assert expression_columns("case when Status = 'x' then Amount end") == ("amount", "status")
+
+
+def test_expression_columns_ignores_literals_and_unparseable_input() -> None:
+    assert expression_columns("42") == ()
+    assert expression_columns("case when ((") == ()
 
 
 def test_referenced_relations_keeps_only_three_part_keys() -> None:

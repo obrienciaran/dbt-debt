@@ -39,6 +39,26 @@ def test_uncontracted_untested_column_is_clean() -> None:
     assert blockers.is_blocked is False
 
 
+def test_column_named_by_a_semantic_model_is_blocked() -> None:
+    # Declared semantic-layer use blocks the column (like a test) rather than marking it
+    # consumed: "unused but blocked" is the honest verdict for declared-but-unobserved use.
+    from dbt_debt.domain import SemanticConsumer
+
+    manifest = load_manifest(FIXTURE)
+    manifest.semantic_consumers["semantic_model.jaffle_shop.orders"] = SemanticConsumer(
+        unique_id="semantic_model.jaffle_shop.orders",
+        name="orders",
+        kind="semantic_model",
+        depends_on=(STG,),
+        column_refs=((STG, "order_id"),),
+    )
+    blockers = column_blockers(manifest, STG, "order_id")
+    assert blockers.backed_by_semantic_models == ("semantic_model.jaffle_shop.orders",)
+    assert blockers.is_blocked is True
+    # A column the semantic model does not name stays clean.
+    assert column_blockers(manifest, STG, "amount").is_blocked is False
+
+
 def test_analyze_columns_is_ordered_and_complete() -> None:
     manifest = load_manifest(FIXTURE)
     dead = {(FCT, "amount"), (STG, "order_id"), (FCT, "order_id")}

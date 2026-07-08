@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 from typing import Any
 
 from dbt_debt.domain import UsageRow, WarehouseRelation
@@ -78,6 +79,42 @@ GROUP BY query
 """.strip()
 
 
+def first_seen_query(region: str, lookback_days: int) -> str:
+    """The earliest job that touched each relation in the window, for the too-new guard.
+
+    Deliberately unfiltered — every statement type, dbt's own builds included — because the
+    question is "when did this relation first exist", not "who used it": an old model rebuilt
+    nightly then has builds throughout the window, while a model created mid-window first
+    appears mid-window. Both `referenced_tables` and `destination_table` are unioned in, since
+    a CTAS/dbt build reliably records the created table in `destination_table` (its presence
+    in `referenced_tables` is not guaranteed).
+    """
+
+    window = (
+        f"creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(lookback_days)} DAY)"
+    )
+    return f"""
+SELECT relation_key, MIN(creation_time) AS first_seen
+FROM (
+  SELECT
+    LOWER(CONCAT(ref.project_id, '.', ref.dataset_id, '.', ref.table_id)) AS relation_key,
+    creation_time
+  FROM {_region_dataset(region)}.INFORMATION_SCHEMA.JOBS_BY_PROJECT,
+    UNNEST(referenced_tables) AS ref
+  WHERE {window}
+  UNION ALL
+  SELECT
+    LOWER(CONCAT(destination_table.project_id, '.', destination_table.dataset_id, '.',
+      destination_table.table_id)) AS relation_key,
+    creation_time
+  FROM {_region_dataset(region)}.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+  WHERE {window}
+    AND destination_table.table_id IS NOT NULL
+)
+GROUP BY relation_key
+""".strip()
+
+
 def existing_relations_query(project: str, datasets: Iterable[str]) -> str:
     """All base tables and views in `datasets`, for orphan discovery.
 
@@ -120,6 +157,12 @@ def parse_relation_rows(rows: Iterable[Mapping[str, Any]]) -> list[WarehouseRela
         )
         for row in rows
     ]
+
+
+def parse_first_seen_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, datetime]:
+    """Parse first-seen rows into a relation_key -> earliest job timestamp map."""
+
+    return {str(row["relation_key"]).lower(): row["first_seen"] for row in rows}
 
 
 def parse_usage_rows(rows: Iterable[Mapping[str, Any]]) -> list[UsageRow]:

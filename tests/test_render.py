@@ -8,6 +8,7 @@ from dbt_debt.domain import WarehouseRelation
 from dbt_debt.report.render_json import render_json, render_orphans_json
 from dbt_debt.report.render_text import humanize_bytes, render_orphans_text, render_text
 from dbt_debt.report.scorecard import (
+    AffectedConsumer,
     ColumnReport,
     DeadColumn,
     DeadModel,
@@ -22,7 +23,7 @@ CARD = Scorecard(
     unused_models=1,
     removable_tests=("t1",),
     unaffected_exposures=(),
-    affected_exposures=("e1",),
+    affected_exposures=(AffectedConsumer("exposure", "orders_dashboard", "e1"),),
     dead_models=(DeadModel("model.x.fct", "fct", "p.d.fct", 2048),),
     reclaimable_bytes=2048,
 )
@@ -47,6 +48,7 @@ def test_render_text_matches_mockup() -> None:
             "Potential savings:",
             "  - 1 test removable",
             "  ! 1 exposure affected (review before removing)",
+            "      - orders_dashboard",
             "  - 2.0 KB reclaimable storage",
             "",
             "Top 1 of 1 unused models (most reclaimable storage first):",
@@ -61,7 +63,72 @@ def test_render_json_roundtrips() -> None:
     assert data["project_name"] == "jaffle_shop"
     assert data["unused_models"] == 1
     assert data["dead_models"][0]["total_bytes"] == 2048
+    assert data["dead_models"][0]["resource_type"] == "model"
+    # Affected consumers are objects carrying kind and name, not bare unique_ids.
+    assert data["affected_exposures"] == [
+        {"kind": "exposure", "name": "orders_dashboard", "unique_id": "e1"}
+    ]
     assert data["columns"] is None
+
+
+def test_render_text_lists_affected_semantic_consumers() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=1,
+        unused_models=1,
+        affected_semantic=(
+            AffectedConsumer("semantic_model", "orders", "semantic_model.p.orders"),
+            AffectedConsumer("metric", "revenue", "metric.p.revenue"),
+            AffectedConsumer("saved_query", "weekly", "saved_query.p.weekly"),
+        ),
+        dead_models=(DeadModel("model.x.fct", "fct", "p.d.fct", 0),),
+    )
+    text = render_text(card)
+    assert "! 3 semantic-layer consumers affected (review before removing)" in text
+    # Each consumer is named with its kind, so the reader knows what to go and check.
+    assert "      - orders (semantic model)" in text
+    assert "      - revenue (metric)" in text
+    assert "      - weekly (saved query)" in text
+
+
+def test_render_text_lists_too_new_nodes_separately() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=2,
+        unused_models=1,
+        dead_models=(DeadModel("model.x.stg", "stg", "p.d.stg", 0),),
+        too_new_models=(
+            DeadModel("model.x.brand_new", "brand_new", "p.d.brand_new", 0, "models/new.sql"),
+        ),
+    )
+    text = render_text(card, detail=True)
+    assert "? 1 too new to judge (first seen recently; not counted as unused)" in text
+    assert "Too new to judge (1):" in text
+    assert "  - brand_new  models/new.sql" in text
+    # The unused list stays clean of it.
+    assert "Unused models (1):" in text
+
+
+def test_render_text_tags_dead_seeds_and_snapshots() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=1,
+        unused_models=3,
+        dead_models=(
+            DeadModel("model.x.fct", "fct", "p.d.fct", 2048),
+            DeadModel("seed.x.codes", "codes", "p.d.codes", 512, resource_type="seed"),
+            DeadModel("snapshot.x.orders", "orders", "p.d.orders", 0, resource_type="snapshot"),
+        ),
+        reclaimable_bytes=2560,
+    )
+    text = render_text(card, detail=True)
+    assert "✗ 3 unused (incl. 1 seed, 1 snapshot)" in text
+    assert "2. codes (seed) (512 B)" in text
+    assert "3. orders (snapshot)" in text
+    assert "- codes (seed)  512 B" in text
 
 
 def _column_card() -> Scorecard:
@@ -105,7 +172,9 @@ def test_render_text_with_column_section() -> None:
     assert "  1. dim_customer.old_marketing_score" in out
     assert "  2. fct_orders.amount (blocked)" in out
     # A blocked column in the list triggers the explanatory legend.
-    assert "(blocked = unused but still backed by a test or enforced contract" in out
+    assert (
+        "(blocked = unused but still backed by a test, enforced contract, or semantic model" in out
+    )
     # No detail section unless asked.
     assert "Unused columns (" not in out
 

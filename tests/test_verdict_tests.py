@@ -37,6 +37,29 @@ def test_unrelated_dead_model_does_not_remove_test() -> None:
     assert removable_tests(manifest, dead_models={STG}) == []
 
 
+def test_dead_seed_makes_its_test_removable() -> None:
+    # A seed is a buildable node like any model, so a test attached to a dead seed goes with it.
+    manifest = Manifest(
+        project_name="t",
+        dbt_schema_version="",
+        dbt_version=None,
+        models={
+            "seed.t.codes": Model(unique_id="seed.t.codes", name="codes", resource_type="seed")
+        },
+        tests={
+            "test.t.codes": Test(
+                unique_id="test.t.codes",
+                name="not_null_codes_code",
+                depends_on=("seed.t.codes",),
+                attached_node="seed.t.codes",
+                column_name="code",
+            ),
+        },
+    )
+    result = removable_tests(manifest, dead_models={"seed.t.codes"})
+    assert [t.unique_id for t in result] == ["test.t.codes"]
+
+
 def test_unattached_test_falls_back_to_dependencies() -> None:
     manifest = Manifest(
         project_name="t",

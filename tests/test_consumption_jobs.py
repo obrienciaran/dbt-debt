@@ -10,6 +10,8 @@ from dbt_debt.config import DEFAULT_QUERY_COMMENT_PATTERN
 from dbt_debt.consumption.exclusion import exclusion_clause
 from dbt_debt.consumption.jobs import (
     existing_relations_query,
+    first_seen_query,
+    parse_first_seen_rows,
     parse_query_text_rows,
     parse_relation_rows,
     parse_usage_rows,
@@ -86,6 +88,30 @@ def test_existing_relations_query_rejects_bad_dataset() -> None:
 def test_existing_relations_query_rejects_bad_project() -> None:
     with pytest.raises(ValueError):
         existing_relations_query("bad project!", ["good"])
+
+
+def test_first_seen_query_shape() -> None:
+    sql = first_seen_query("US", 90)
+    # Every statement type and dbt's own builds count — the question is when the relation
+    # first existed, not who used it — so no SELECT filter and no dbt exclusion.
+    assert "statement_type" not in sql
+    assert "REGEXP_CONTAINS" not in sql
+    assert "MIN(creation_time) AS first_seen" in sql
+    assert "UNNEST(referenced_tables)" in sql
+    assert "destination_table.table_id IS NOT NULL" in sql
+    assert "UNION ALL" in sql
+    assert sql.count("INTERVAL 90 DAY") == 2
+
+
+def test_first_seen_query_rejects_bad_region() -> None:
+    with pytest.raises(ValueError):
+        first_seen_query("US; DROP", 90)
+
+
+def test_parse_first_seen_rows() -> None:
+    when = datetime(2026, 6, 1)
+    parsed = parse_first_seen_rows([{"relation_key": "P.D.T", "first_seen": when}])
+    assert parsed == {"p.d.t": when}
 
 
 def test_parse_relation_rows() -> None:

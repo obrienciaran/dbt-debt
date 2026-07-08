@@ -26,14 +26,24 @@ class ColumnBlockers:
     column_name: str
     backed_by_tests: tuple[str, ...]
     contract_enforced: bool
+    backed_by_semantic_models: tuple[str, ...] = ()
 
     @property
     def is_blocked(self) -> bool:
-        return bool(self.backed_by_tests) or self.contract_enforced
+        return (
+            bool(self.backed_by_tests)
+            or self.contract_enforced
+            or bool(self.backed_by_semantic_models)
+        )
 
 
 def column_blockers(manifest: Manifest, model_unique_id: str, column_name: str) -> ColumnBlockers:
-    """Compute the blocker analysis for a single column."""
+    """Compute the blocker analysis for a single column.
+
+    A semantic model naming the column blocks it the same way a test does: declared use, not
+    observed use — folding it into the consumed set would silently mark the column active,
+    whereas "unused but blocked" is the honest verdict.
+    """
 
     model = manifest.models.get(model_unique_id)
     contract_enforced = bool(
@@ -44,11 +54,17 @@ def column_blockers(manifest: Manifest, model_unique_id: str, column_name: str) 
         for test in manifest.tests.values()
         if test.attached_node == model_unique_id and test.column_name == column_name
     )
+    backed_by_semantic_models = tuple(
+        consumer.unique_id
+        for consumer in manifest.semantic_consumers.values()
+        if (model_unique_id, column_name) in consumer.column_refs
+    )
     return ColumnBlockers(
         model_unique_id=model_unique_id,
         column_name=column_name,
         backed_by_tests=backed_by_tests,
         contract_enforced=contract_enforced,
+        backed_by_semantic_models=backed_by_semantic_models,
     )
 
 

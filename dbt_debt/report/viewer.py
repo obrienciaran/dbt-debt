@@ -109,7 +109,7 @@ def build_views(scorecard: Scorecard, top_n: int) -> list[tuple[str, list[str]]]
     ]
 
 
-def export_pane(json_text: str, written_to: str | None) -> list[str]:
+def export_pane(json_text: str, written_to: str | None, error: str | None = None) -> list[str]:
     """The 4th tab: an action pane that writes the JSON report on confirm."""
 
     lines = [
@@ -125,6 +125,8 @@ def export_pane(json_text: str, written_to: str | None) -> list[str]:
     ]
     if written_to is not None:
         lines.append(f"  ✓ wrote report to {written_to}")
+    elif error is not None:
+        lines.append(f"  ✗ could not write the report: {error}")
     return lines
 
 
@@ -280,6 +282,10 @@ def run_viewer(scorecard: Scorecard, config: Config) -> bool:
             _loop(base_views, json_text, read_key)
     except _SetupError:
         return False
+    except KeyboardInterrupt:
+        # Ctrl-C in the viewer just means quit; the reader's __exit__ has already restored
+        # the terminal on unwind.
+        pass
     return True
 
 
@@ -287,10 +293,11 @@ def _loop(
     base_views: list[tuple[str, list[str]]], json_text: str, read_key: Callable[[], str | None]
 ) -> None:
     active, written_to = 0, None
+    export_error: str | None = None
     offsets = [0] * (len(base_views) + 1)  # one per base view plus the Export tab
     export_idx = len(base_views)
     while True:
-        views = base_views + [("Export", export_pane(json_text, written_to))]
+        views = base_views + [("Export", export_pane(json_text, written_to, export_error))]
         size = shutil.get_terminal_size()
         sys.stdout.write(render_frame(views, active, offsets[active], size.columns, size.lines))
         sys.stdout.flush()
@@ -307,7 +314,10 @@ def _loop(
         elif key == "backtab":
             active = (active - 1) % len(views)
         elif active == export_idx and key in ("write", "enter") and written_to is None:
-            written_to = write_report(json_text)
+            try:
+                written_to = write_report(json_text)
+            except OSError as exc:
+                export_error = str(exc)
         elif key == "down":
             offsets[active] += 1
         elif key == "up":

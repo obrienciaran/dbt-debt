@@ -15,16 +15,24 @@ https://github.com/user-attachments/assets/850ba77f-61c8-446e-bf5c-cc49f0225391
 ```
 Models:
   ✓ 213 active
-  ✗ 17 unused
+  ✗ 17 unused (incl. 2 seeds)
+  ? 1 too new to judge (first seen recently; not counted as unused)
 Columns:
-  ✓ 4,382 active
+  ✓ 4382 active
   ✗ 3 unused
 Orphans:
-  ✗ 4 tables in your dbt datasets with no dbt model behind them
-  ! 2 tables your models read that dbt was never told about
+  ✗ 4 tables in managed datasets with no dbt model
+  ! 2 sources found but not declared in the manifest
+
 Potential savings:
-  - 3 columns you could remove
-  - 2 tests you could remove with them
+  - 3 columns removable
+  - 2 tests removable
+  ! 1 exposure affected (review before removing)
+      - weekly_revenue_dashboard
+  ! 1 semantic-layer consumer affected (review before removing)
+      - total_revenue (metric)
+  - 5.0 GB reclaimable storage
+
 Top 3 of 3 unused columns (ranked by table bytes; BigQuery has no per-column sizes):
   1. dim_customer.old_marketing_score
   2. fct_orders.legacy_discount_code
@@ -37,7 +45,13 @@ A **model** is one of your `.sql` files. A **column** is one field in the table 
 The **lookback window** is how far back we read BigQuery's query log (180 days by default).
 
 - **active / unused models.** A model is **unused** if, in the lookback window, nothing queried it
-  and nothing queried anything built from it. Everything else is **active**.
+  and nothing queried anything built from it. Everything else is **active**. Seeds and snapshots
+  are checked the same way and tagged `(seed)` / `(snapshot)` in the lists.
+- **too new to judge.** A model whose table first appeared in the query log fewer than 7 days ago
+  (`--min-age-days`) hasn't had a fair chance to be queried yet, so it's listed separately instead
+  of being called unused. This guard only applies to the things dbt builds, i.e. models, seeds,
+  or snapshots. An orphaned table is reported regardless of its age, as it means "this table exists
+  and dbt has no record of it", which is just as true on the day it was made, or a later point in time.
 - **active / unused columns.** A column is **unused** if no query read it, and nothing read another
   column built from it.
 - **columns you could remove.** Unused columns that nothing in your dbt project still depends on (no
@@ -50,6 +64,10 @@ The **lookback window** is how far back we read BigQuery's query log (180 days b
   team has written into the dbt project. An unused model that feeds one is flagged "affected — check
   before removing" so you don't pull out something still feeding a dashboard. Exposures whose models
   are all active aren't listed.
+- **semantic-layer consumers affected.** If your project declares semantic models, metrics, or saved
+  queries (dbt's semantic layer), an unused model that feeds one — even through a chain of metrics —
+  is flagged for review the same way, and a column a semantic model names is never counted as
+  removable.
 - **tables with no dbt model behind them (orphans).** A real table or view in a dataset dbt builds
   into, but which dbt has no record of, usually left over from a renamed or deleted model, or made
   by hand. dbt-debt only looks inside the datasets dbt builds into, so any raw input tables are
@@ -94,6 +112,7 @@ Export). When you pipe the output, run it in CI, or send it to a script, there i
 | `dbt-debt scan --format json -o debt.json` | JSON written to a file |
 | `dbt-debt scan --no-interactive` | plain text, even in a terminal |
 | `dbt-debt scan --orphans` | just the orphan and undeclared-source report |
+| `dbt-debt scan --min-age-days 30` | anything first seen in the last 30 days is "too new to judge", not unused (default: 7; `0` turns the guard off) |
 
 For the cache, how it works, permissions, full options, and how to work on dbt-debt, see
 [`USAGE.md`](USAGE.md).

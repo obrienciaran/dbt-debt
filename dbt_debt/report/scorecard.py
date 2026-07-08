@@ -9,29 +9,51 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Set
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 from dbt_debt.artifacts.catalog import Catalog
 from dbt_debt.artifacts.graph import Graph
 from dbt_debt.config import Config
-from dbt_debt.consumption.usage import queried_model_ids
+from dbt_debt.consumption.usage import first_seen_model_ids, queried_model_ids
 from dbt_debt.domain import ColumnEdge, ColumnRef, Manifest, UsageRow, WarehouseRelation
 from dbt_debt.verdict.blockers import analyze_columns
 from dbt_debt.verdict.columns import dead_columns
 from dbt_debt.verdict.exposures import affected_exposures, unaffected_exposures
+from dbt_debt.verdict.freshness import too_new_models
 from dbt_debt.verdict.models import dead_models
 from dbt_debt.verdict.orphans import orphaned_relations, undeclared_sources
+from dbt_debt.verdict.semantic import affected_semantic_consumers
 from dbt_debt.verdict.tests import removable_tests
 
 
 @dataclass(frozen=True)
+class AffectedConsumer:
+    """A declared consumer fed by a dead model, named for the report.
+
+    Covers exposures and the semantic-layer kinds so the report can say *which* dashboard or
+    metric is at risk, not just how many. `kind` is "exposure", "semantic_model", "metric",
+    or "saved_query".
+    """
+
+    kind: str
+    name: str
+    unique_id: str
+
+
+@dataclass(frozen=True)
 class DeadModel:
-    """A dead model and the storage it would reclaim. `file_path` points at the `.sql` to remove."""
+    """A dead buildable node and the storage it would reclaim. `file_path` is the file to remove.
+
+    `resource_type` tags what kind of node died — "model", "seed", or "snapshot" — so the
+    renderers can label non-model entries without a second list.
+    """
 
     unique_id: str
     name: str
     relation_key: str
     total_bytes: int
     file_path: str | None = None
+    resource_type: str = "model"
 
 
 @dataclass(frozen=True)
@@ -93,8 +115,11 @@ class Scorecard:
     unused_models: int
     removable_tests: tuple[str, ...] = ()
     unaffected_exposures: tuple[str, ...] = ()
-    affected_exposures: tuple[str, ...] = ()
+    affected_exposures: tuple[AffectedConsumer, ...] = ()
+    affected_semantic: tuple[AffectedConsumer, ...] = ()
     dead_models: tuple[DeadModel, ...] = field(default_factory=tuple)
+    too_new_models: tuple[DeadModel, ...] = ()
+    """Unqueried but first seen too recently to judge — a third bucket, not counted unused."""
     reclaimable_bytes: int = 0
     columns: ColumnReport | None = None
     orphans: OrphanReport | None = None
@@ -114,11 +139,26 @@ def build_scorecard(
     config: Config,
     column_report: ColumnReport | None = None,
     orphan_report: OrphanReport | None = None,
+    first_seen: Mapping[str, datetime] | None = None,
+    now: datetime | None = None,
 ) -> Scorecard:
-    """Combine usage, DAG propagation, and manifest traversals into a `Scorecard`."""
+    """Combine usage, DAG propagation, and manifest traversals into a `Scorecard`.
+
+    `first_seen` (relation_key -> earliest job) drives the too-new guard: an unqueried node
+    younger than `config.min_age_days` is set aside as "too new to judge" and excluded from
+    every unused-derived figure — the count, the removable tests, the exposure and semantic
+    impact, and the reclaimable bytes. `now` is injectable for tests.
+    """
 
     queried = queried_model_ids(manifest, usage_rows)
-    dead = dead_models(manifest, graph, queried)
+    unqueried = dead_models(manifest, graph, queried)
+    too_new = too_new_models(
+        unqueried,
+        first_seen_model_ids(manifest, first_seen or {}),
+        now or datetime.now(timezone.utc),
+        timedelta(days=config.min_age_days),
+    )
+    dead = unqueried - too_new
 
     # When the column stage ran, tests guarding a dead column are removable too — rebuild the
     # (model, column) refs the tests verdict compares against from the ranked dead list.
@@ -132,29 +172,39 @@ def build_scorecard(
     # figure — BigQuery reports no per-column size, so dead columns are not summed here.
     reclaimable = sum(_model_bytes(manifest, storage_bytes, uid) for uid in dead)
 
-    ranked = sorted(dead, key=lambda uid: (-_model_bytes(manifest, storage_bytes, uid), uid))
-    dead_assets = tuple(
-        DeadModel(
-            unique_id=uid,
-            name=manifest.models[uid].name,
-            relation_key=manifest.models[uid].relation_key,
-            total_bytes=_model_bytes(manifest, storage_bytes, uid),
-            file_path=manifest.models[uid].original_file_path,
+    def ranked_assets(uids: Set[str]) -> tuple[DeadModel, ...]:
+        ranked = sorted(uids, key=lambda uid: (-_model_bytes(manifest, storage_bytes, uid), uid))
+        return tuple(
+            DeadModel(
+                unique_id=uid,
+                name=manifest.models[uid].name,
+                relation_key=manifest.models[uid].relation_key,
+                total_bytes=_model_bytes(manifest, storage_bytes, uid),
+                file_path=manifest.models[uid].original_file_path,
+                resource_type=manifest.models[uid].resource_type,
+            )
+            for uid in ranked
         )
-        for uid in ranked
-    )
 
     return Scorecard(
         project_name=manifest.project_name,
         lookback_days=config.lookback_days,
-        active_models=len(manifest.models) - len(dead),
+        active_models=len(manifest.models) - len(unqueried),
         unused_models=len(dead),
         removable_tests=tuple(
             t.unique_id for t in removable_tests(manifest, dead, dead_column_refs)
         ),
         unaffected_exposures=tuple(e.unique_id for e in unaffected_exposures(manifest, dead)),
-        affected_exposures=tuple(e.unique_id for e in affected_exposures(manifest, dead)),
-        dead_models=dead_assets,
+        affected_exposures=tuple(
+            AffectedConsumer(kind="exposure", name=e.name, unique_id=e.unique_id)
+            for e in affected_exposures(manifest, dead)
+        ),
+        affected_semantic=tuple(
+            AffectedConsumer(kind=c.kind, name=c.name, unique_id=c.unique_id)
+            for c in affected_semantic_consumers(manifest, dead)
+        ),
+        dead_models=ranked_assets(dead),
+        too_new_models=ranked_assets(too_new),
         reclaimable_bytes=reclaimable,
         columns=column_report,
         orphans=orphan_report,

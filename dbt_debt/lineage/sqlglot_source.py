@@ -10,19 +10,30 @@ from __future__ import annotations
 
 from dbt_debt.artifacts.catalog import Catalog
 from dbt_debt.domain import ColumnEdge, Manifest
-from dbt_debt.sqlparse import build_schema, column_lineage_edges
+from dbt_debt.sqlparse import Schema, build_schema, column_lineage_edges
 
 
 class SqlglotLineage:
-    """`LineageSource` that reconstructs column edges from compiled model SQL."""
+    """`LineageSource` that reconstructs column edges from compiled model SQL.
 
-    def __init__(self, manifest: Manifest, catalog: Catalog, dialect: str = "bigquery") -> None:
+    `schema` lets a caller that already built the sqlglot schema from the catalog (the column
+    stage does) share it instead of building it twice; left None, it is built here.
+    """
+
+    def __init__(
+        self,
+        manifest: Manifest,
+        catalog: Catalog,
+        dialect: str = "bigquery",
+        schema: Schema | None = None,
+    ) -> None:
         self._manifest = manifest
         self._catalog = catalog
         self._dialect = dialect
+        self._schema = schema
 
     def edges(self) -> list[ColumnEdge]:
-        schema = build_schema(self._catalog.relation_columns())
+        schema = self._schema or build_schema(self._catalog.relation_columns())
         relation_to_id = self._manifest.relation_to_id()
 
         edges: list[ColumnEdge] = []

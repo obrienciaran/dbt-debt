@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dbt_debt.artifacts.manifest import load_manifest
+from dbt_debt.artifacts.manifest import load_manifest, parse_manifest
 
 FIXTURE = Path(__file__).parent / "fixtures" / "manifest.json"
 
@@ -38,6 +38,33 @@ def test_test_attachment() -> None:
     test = manifest.tests["test.jaffle_shop.not_null_fct_orders_order_id.a1b2c3"]
     assert test.attached_node == "model.jaffle_shop.fct_orders"
     assert test.column_name == "order_id"
+
+
+def test_column_and_test_names_are_lowercased() -> None:
+    # Mixed-case YAML column names are normalized at parse time, the same policy as
+    # relation_key, so they compare equal to catalog columns and parsed query reads.
+    data = {
+        "metadata": {
+            "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+            "project_name": "p",
+        },
+        "nodes": {
+            "model.p.m": {
+                "resource_type": "model",
+                "name": "m",
+                "columns": {"UserID": {"name": "UserID"}},
+            },
+            "test.p.t": {
+                "resource_type": "test",
+                "name": "t",
+                "attached_node": "model.p.m",
+                "column_name": "UserID",
+            },
+        },
+    }
+    manifest = parse_manifest(data)
+    assert manifest.models["model.p.m"].columns == ("userid",)
+    assert manifest.tests["test.p.t"].column_name == "userid"
 
 
 def test_exposure_depends_on() -> None:

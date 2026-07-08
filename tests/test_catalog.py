@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dbt_debt.artifacts.catalog import load_catalog
+from dbt_debt.artifacts.catalog import load_catalog, parse_catalog
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.json"
 
@@ -34,3 +34,17 @@ def test_sources_are_loaded_for_schema_resolution() -> None:
 def test_unknown_node_has_no_columns() -> None:
     catalog = load_catalog(FIXTURE)
     assert catalog.model_columns("model.x.missing") == ()
+
+
+def test_column_names_are_lowercased() -> None:
+    # Query text and lineage refs are lowercased when parsed, so the catalog's column universe
+    # must be too — otherwise a mixed-case column could never join against its own reads.
+    data = {
+        "nodes": {
+            "model.p.m": {
+                "metadata": {"database": "proj", "schema": "mart", "name": "m"},
+                "columns": {"UserID": {}, "amount": {}},
+            }
+        }
+    }
+    assert parse_catalog(data).model_columns("model.p.m") == ("userid", "amount")

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dbt_debt.artifacts.catalog import load_catalog
+from dbt_debt.artifacts.catalog import load_catalog, parse_catalog
 from dbt_debt.artifacts.manifest import load_manifest
+from dbt_debt.domain import Manifest, Model
 from dbt_debt.cli import _scan
 from dbt_debt.config import Config
 from dbt_debt.consumption.columns import consumed_model_columns
@@ -62,3 +63,28 @@ def test_scan_without_lineage_has_no_column_section() -> None:
     config = Config(project_dir=FIXTURES.parent.parent, target_path=Path("tests/fixtures"))
     card = _scan(config, FakeBigQueryClient())
     assert card.columns is None
+
+
+def test_mixed_case_column_is_not_reported_dead_when_queried() -> None:
+    # Regression: a column declared `UserID` used to be reported dead even when queried
+    # directly, because the catalog kept its original case while reads were lowercased.
+    manifest = Manifest(project_name="p", dbt_schema_version="v", dbt_version="1")
+    manifest.models["model.p.orders"] = Model(
+        unique_id="model.p.orders", name="orders", database="proj", schema="mart"
+    )
+    catalog = parse_catalog(
+        {
+            "nodes": {
+                "model.p.orders": {
+                    "metadata": {"database": "proj", "schema": "mart", "name": "orders"},
+                    "columns": {"UserID": {}, "amount": {}},
+                }
+            }
+        }
+    )
+    schema = build_schema(catalog.relation_columns())
+    consumed = consumed_model_columns(
+        ["SELECT UserID FROM proj.mart.orders"], schema, manifest.relation_to_id()
+    )
+    report = build_column_report(manifest, catalog, consumed, [], {})
+    assert [c.column for c in report.dead_columns] == ["amount"]

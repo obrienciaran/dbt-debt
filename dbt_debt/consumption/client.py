@@ -13,6 +13,14 @@ from typing import Protocol, runtime_checkable
 from dbt_debt.domain import UsageRow, WarehouseRelation
 
 
+class MissingCredentialsError(RuntimeError):
+    """Raised when no Google credentials can be found at all.
+
+    Distinct from `MissingPermissionError`: here the caller is not signed in, rather than signed
+    in without the required grant. The CLI turns both into a friendly message and a clean exit.
+    """
+
+
 class MissingPermissionError(RuntimeError):
     """Raised when the caller cannot see every user's jobs.
 

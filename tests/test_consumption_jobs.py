@@ -52,6 +52,14 @@ def test_exclusion_clause_wraps_pattern_as_raw_string() -> None:
     assert clause == "NOT REGEXP_CONTAINS(query, r'''\"app\":\\s*\"dbt\"''')"
 
 
+def test_exclusion_clause_rejects_patterns_that_break_the_sql_string() -> None:
+    # The pattern sits inside a raw triple-quoted BigQuery string, so these would end it early.
+    with pytest.raises(ValueError):
+        exclusion_clause("bad'''pattern")
+    with pytest.raises(ValueError):
+        exclusion_clause("ends'")
+
+
 def test_parse_usage_rows() -> None:
     when = datetime(2026, 6, 1)
     rows = [{"relation_key": "P.D.T", "query_count": 5, "last_queried": when}]

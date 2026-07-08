@@ -36,8 +36,13 @@ class DeadModel:
 
 @dataclass(frozen=True)
 class DeadColumn:
-    """A dead column; `blocked` flags those not trivially removable, `file_path` its defining model."""
+    """A dead column; `blocked` flags those not trivially removable, `file_path` its defining model.
 
+    `unique_id` is the owning model's, so downstream verdicts (like removable tests) can rebuild
+    the exact (model, column) ref without matching on the display name.
+    """
+
+    unique_id: str
     model_name: str
     column: str
     blocked: bool
@@ -115,6 +120,14 @@ def build_scorecard(
     queried = queried_model_ids(manifest, usage_rows)
     dead = dead_models(manifest, graph, queried)
 
+    # When the column stage ran, tests guarding a dead column are removable too — rebuild the
+    # (model, column) refs the tests verdict compares against from the ranked dead list.
+    dead_column_refs: set[ColumnRef] = (
+        {(c.unique_id, c.column) for c in column_report.dead_columns}
+        if column_report is not None
+        else set()
+    )
+
     # Storage reclaimed by dropping the whole dead tables. Only whole dead models have a real
     # figure — BigQuery reports no per-column size, so dead columns are not summed here.
     reclaimable = sum(_model_bytes(manifest, storage_bytes, uid) for uid in dead)
@@ -136,7 +149,9 @@ def build_scorecard(
         lookback_days=config.lookback_days,
         active_models=len(manifest.models) - len(dead),
         unused_models=len(dead),
-        removable_tests=tuple(t.unique_id for t in removable_tests(manifest, dead)),
+        removable_tests=tuple(
+            t.unique_id for t in removable_tests(manifest, dead, dead_column_refs)
+        ),
         unaffected_exposures=tuple(e.unique_id for e in unaffected_exposures(manifest, dead)),
         affected_exposures=tuple(e.unique_id for e in affected_exposures(manifest, dead)),
         dead_models=dead_assets,
@@ -176,6 +191,7 @@ def build_column_report(
 
     ranked_dead = tuple(
         DeadColumn(
+            unique_id=unique_id,
             model_name=manifest.models[unique_id].name,
             column=column,
             blocked=blockers[(unique_id, column)].is_blocked,

@@ -12,8 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Set
 
-from dbt_debt.domain import Manifest, Test
-from dbt_debt.verdict import ColumnRef
+from dbt_debt.domain import ColumnRef, Manifest, Test
 
 
 def removable_tests(

@@ -26,7 +26,10 @@ from dbt_debt.report.viewer import (
 
 
 def _card() -> Scorecard:
-    dead = tuple(DeadColumn("fct_orders", f"c{i}", i == 0, "models/fct.sql") for i in range(30))
+    dead = tuple(
+        DeadColumn("model.p.fct_orders", "fct_orders", f"c{i}", i == 0, "models/fct.sql")
+        for i in range(30)
+    )
     return Scorecard(
         project_name="demo",
         lookback_days=180,

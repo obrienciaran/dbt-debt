@@ -15,7 +15,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-fusion = ["duckdb>=0.10"]
 dev = ["pytest>=8.0", "mypy>=1.8", "ruff>=0.4"]
 
 [project.scripts]

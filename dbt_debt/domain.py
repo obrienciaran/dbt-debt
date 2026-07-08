@@ -30,17 +30,6 @@ def relation_key(database: str | None, schema: str | None, identifier: str | Non
     return ".".join(part.strip(' `"').lower() for part in parts if part)
 
 
-@dataclass(frozen=True)
-class Column:
-    """A column documented in the dbt manifest, by name.
-
-    The manifest only lists columns documented in YAML; the full physical column list comes
-    later from catalog.json.
-    """
-
-    name: str
-
-
 @dataclass
 class Model:
     """A dbt model: its `.sql` definition and declared metadata.
@@ -48,6 +37,11 @@ class Model:
     The `relation_key` property is the join key against BigQuery's `referenced_tables` in the
     consumption layer; it is derived from `database`/`schema`/`alias`, so we never parse dbt's
     quoted `relation_name`.
+
+    `columns` holds the names documented in YAML, lowercased at parse time — the same
+    normalization `relation_key` applies to relations, so column names compare equal across the
+    manifest, the catalog, and parsed query text. The full physical column list comes from
+    catalog.json.
     """
 
     unique_id: str
@@ -57,7 +51,7 @@ class Model:
     alias: str | None = None
     original_file_path: str | None = None
     depends_on: tuple[str, ...] = ()
-    columns: dict[str, Column] = field(default_factory=dict)
+    columns: tuple[str, ...] = ()
     contract_enforced: bool = False
     compiled_code: str | None = None
 
@@ -112,7 +106,8 @@ class Test:
     """A dbt test node and what it guards.
 
     `attached_node` / `column_name` let us mark a test removable when the model or column it
-    guards is dead — a pure manifest traversal, no warehouse needed.
+    guards is dead — a pure manifest traversal, no warehouse needed. `column_name` is lowercased
+    at parse time so it compares equal to the normalized dead-column refs.
     """
 
     # Opt out of pytest collection: the class name starts with "Test" but it is a domain

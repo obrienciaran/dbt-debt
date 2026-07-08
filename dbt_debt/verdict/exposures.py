@@ -18,7 +18,7 @@ def unaffected_exposures(manifest: Manifest, dead_models: Set[str]) -> list[Expo
     return [
         exposure
         for exposure in manifest.exposures.values()
-        if not _dead_upstreams(exposure, dead_models)
+        if not _has_dead_upstream(exposure, dead_models)
     ]
 
 
@@ -28,9 +28,9 @@ def affected_exposures(manifest: Manifest, dead_models: Set[str]) -> list[Exposu
     return [
         exposure
         for exposure in manifest.exposures.values()
-        if _dead_upstreams(exposure, dead_models)
+        if _has_dead_upstream(exposure, dead_models)
     ]
 
 
-def _dead_upstreams(exposure: Exposure, dead_models: Set[str]) -> set[str]:
-    return {dep for dep in exposure.depends_on if dep in dead_models}
+def _has_dead_upstream(exposure: Exposure, dead_models: Set[str]) -> bool:
+    return any(dep in dead_models for dep in exposure.depends_on)

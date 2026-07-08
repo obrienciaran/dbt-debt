@@ -6,8 +6,8 @@ together, see [`DESIGN.md`](DESIGN.md).
 ## ⚡ Making repeat runs fast (the cache)
 
 The slow part of a scan is talking to BigQuery, so the first scan saves its BigQuery results to a
-small file in your temp folder. Running `dbt-debt scan` (or `dbt-debt scan --columns`) again soon after and it reads that
-file instead of re-querying.
+small file in your temp folder. Run `dbt-debt scan` (or `dbt-debt scan --columns`) again soon after
+and it reads that file instead of re-querying.
 
 Saved results count as fresh for 1 hour; after that the next scan refetches and replaces them. Change
 the window with `--cache-ttl <hours>`, or skip saved results with `--no-cache` for the latest
@@ -22,13 +22,13 @@ trust. It stays in your temp folder until something removes it:
 - or your OS clears its temp folder — slowly and unpredictably (Windows may never do it), so don't
   count on this.
 
-For a clean slate, its easiest to run `dbt-debt --clear-cache`.
+For a clean slate, it's easiest to run `dbt-debt --clear-cache`.
 
 ## 🔧 How it works
 
 1. Read `manifest.json` and `catalog.json` from `target/`. (dbt-debt never imports or runs dbt, it
    just reads the files dbt already wrote.)
-2. Asks BigQuery which tables were queried (by people or tools) in the lookback window, ignoring dbt's own queries.
+2. Ask BigQuery which tables were queried (by people or tools) in the lookback window, ignoring dbt's own queries.
    With `--columns`, also read those queries' text to see which columns they used.
 3. Trace where each column came from, using your models' SQL, so usage flows back up to the columns
    that fed it.
@@ -125,6 +125,7 @@ dbt-debt scan
     --lookback-days 180       how far back to look; 180 is also the max BigQuery keeps
     --query-comment-pattern   how to recognise dbt's own queries (a regex)
     --columns                 also check which columns are unused (default: models only)
+    --top-n 10                how many unused assets the summary list shows
     --detail                  list every unused table and column (grouped by model, with file paths)
     --format text|json        json always includes the full list
     -o, --output <file>       write the report to a file instead of the screen
@@ -135,7 +136,8 @@ dbt-debt scan
     --clear-cache             clear this project's saved results, then run a fresh scan
 ```
 
-Exit codes: `0` all good, `2` couldn't find the dbt files, `3` missing the required permission.
+Exit codes: `0` all good, `2` couldn't find the dbt files (or an option was invalid), `3` not
+signed in to Google Cloud or missing the required permission.
 
 ## 🛠️ Working on dbt-debt
 

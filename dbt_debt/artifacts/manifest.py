@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from dbt_debt.artifacts._json import as_dict
-from dbt_debt.domain import Column, Exposure, Manifest, Model, Relation, Test, relation_key
+from dbt_debt.domain import Exposure, Manifest, Model, Relation, Test, relation_key
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +66,9 @@ def parse_manifest(data: dict[str, Any]) -> Manifest:
 
 
 def _parse_model(unique_id: str, node: dict[str, Any]) -> Model:
-    columns = {
-        name: Column(name=col.get("name", name))
-        for name, col in as_dict(node.get("columns")).items()
-    }
+    # Column names are lowercased here (and in the catalog and test parsers) so every layer
+    # compares them the same way, matching the relation_key normalization.
+    columns = tuple(name.lower() for name in as_dict(node.get("columns")))
     return Model(
         unique_id=unique_id,
         name=node.get("name", ""),
@@ -85,12 +84,13 @@ def _parse_model(unique_id: str, node: dict[str, Any]) -> Model:
 
 
 def _parse_test(unique_id: str, node: dict[str, Any]) -> Test:
+    column_name = node.get("column_name")
     return Test(
         unique_id=unique_id,
         name=node.get("name", ""),
         depends_on=_depends_on(node),
         attached_node=node.get("attached_node"),
-        column_name=node.get("column_name"),
+        column_name=column_name.lower() if column_name else None,
     )
 
 

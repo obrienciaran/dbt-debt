@@ -4,9 +4,3 @@ Nothing here performs I/O or talks to BigQuery. The "dead" sets (dead models, de
 are passed in, computed upstream by the consumption/lineage layers. Keeping this layer pure
 makes the load-bearing logic unit-testable with in-memory fixtures and no credentials.
 """
-
-from __future__ import annotations
-
-from dbt_debt.domain import ColumnRef
-
-__all__ = ["ColumnRef"]

@@ -9,7 +9,7 @@ from dbt_debt.artifacts.manifest import load_manifest
 from dbt_debt.cli import _emit, _infer_project, _scan
 from dbt_debt.config import Config
 from dbt_debt.domain import UsageRow
-from dbt_debt.report.scorecard import build_scorecard
+from dbt_debt.report.scorecard import ColumnReport, DeadColumn, build_scorecard
 from tests.fakes import FakeBigQueryClient
 
 FIXTURE = Path(__file__).parent / "fixtures" / "manifest.json"
@@ -51,6 +51,24 @@ def test_queried_mart_keeps_everything_active() -> None:
     assert card.removable_tests == ()
     assert card.unaffected_exposures == (EXPOSURE_ID,)
     assert card.dead_models == ()
+
+
+def test_test_on_dead_column_counts_as_removable() -> None:
+    # The fixture test guards fct_orders.order_id. With every model alive but that column dead,
+    # the test is still removable — the column stage's dead refs reach the tests verdict.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    usage = [UsageRow(relation_key=FCT_KEY, query_count=4)]
+    columns = ColumnReport(
+        active=4,
+        unused=1,
+        removable=0,
+        dead_columns=(DeadColumn("model.jaffle_shop.fct_orders", "fct_orders", "order_id", True),),
+    )
+    card = build_scorecard(manifest, graph, usage, {}, _config(), column_report=columns)
+
+    assert card.unused_models == 0
+    assert card.removable_tests == (TEST_ID,)
 
 
 def test_scan_orchestration_via_fake_client() -> None:

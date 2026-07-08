@@ -286,7 +286,8 @@ def run_viewer(scorecard: Scorecard, config: Config) -> bool:
 def _loop(
     base_views: list[tuple[str, list[str]]], json_text: str, read_key: Callable[[], str | None]
 ) -> None:
-    active, offsets, written_to = 0, [0, 0, 0, 0], None
+    active, written_to = 0, None
+    offsets = [0] * (len(base_views) + 1)  # one per base view plus the Export tab
     export_idx = len(base_views)
     while True:
         views = base_views + [("Export", export_pane(json_text, written_to))]

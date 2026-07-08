@@ -53,6 +53,7 @@ dbt_debt/
   report/
     scorecard.py         # put the result together
     render_text.py / render_json.py
+    viewer.py            # the interactive tabbed viewer (Summary / Detail / JSON / Export), stdlib-only
     spinner.py           # a "working..." spinner shown only while the slow BigQuery steps run
 ```
 
@@ -60,12 +61,11 @@ dbt_debt/
 
 ```
 settings ─┐
-          ├─> artifacts: load manifest.json + catalog.json ─> data classes + dependency map
+          ├─> artifacts: load manifest.json + catalog.json ─> data classes, dependency map, table sizes
           ├─> consumption: BigQuery
           │     • which tables were queried (in the window, dbt's own queries removed)
           │     • the query text (only when checking columns)
           │     • the list of tables in the dbt-managed datasets (only when finding orphans)
-          │     • table sizes
           ├─> lineage (column check): which column feeds which
           ├─> references: which tables each model reads
           └─> decide:

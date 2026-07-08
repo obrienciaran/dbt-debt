@@ -11,7 +11,7 @@ from collections.abc import Set
 
 from dbt_debt.config import Config
 from dbt_debt.consumption import jobs
-from dbt_debt.consumption.client import MissingPermissionError
+from dbt_debt.consumption.client import MissingCredentialsError, MissingPermissionError
 from dbt_debt.consumption.exclusion import exclusion_clause
 from dbt_debt.domain import UsageRow, WarehouseRelation
 
@@ -20,10 +20,18 @@ class RealBigQueryClient:
     """Live BigQuery client implementing the `BigQueryClient` Protocol."""
 
     def __init__(self, config: Config, project: str | None = None) -> None:
+        from google.auth.exceptions import DefaultCredentialsError
         from google.cloud import bigquery
 
         self._config = config
-        self._bq = bigquery.Client(project=project)
+        try:
+            self._bq = bigquery.Client(project=project)
+        except DefaultCredentialsError as exc:
+            raise MissingCredentialsError(
+                "No Google credentials found. Sign in with "
+                "`gcloud auth application-default login` (dbt-debt uses the same credentials "
+                "as dbt) and run the scan again."
+            ) from exc
 
     def assert_usage_permission(self) -> None:
         """Confirm the caller can read all users' jobs by actually listing them.

@@ -18,14 +18,14 @@ Models:
   ✗ 17 unused
 Columns:
   ✓ 4,382 active
-  ✗ 2 unused
+  ✗ 3 unused
 Orphans:
   ✗ 4 tables in your dbt datasets with no dbt model behind them
   ! 2 tables your models read that dbt was never told about
 Potential savings:
   - 3 columns you could remove
   - 2 tests you could remove with them
-Top 3 of 3 unused columns (ranked by table bytes; Bigquery has no per-column sizes):
+Top 3 of 3 unused columns (ranked by table bytes; BigQuery has no per-column sizes):
   1. dim_customer.old_marketing_score
   2. fct_orders.legacy_discount_code
   3. mart_sales.temp_margin_calc
@@ -52,8 +52,8 @@ The **lookback window** is how far back we read BigQuery's query log (180 days b
   are all active aren't listed.
 - **tables with no dbt model behind them (orphans).** A real table or view in a dataset dbt builds
   into, but which dbt has no record of, usually left over from a renamed or deleted model, or made
-  by hand. dbt-debt only look inside the datasets dbt builds into, so any raw input tables are never
-  flagged.
+  by hand. dbt-debt only looks inside the datasets dbt builds into, so any raw input tables are
+  never flagged.
 - **tables your models read but dbt was never told about.** A model reads from a table you never
   declared. These need to be added as a `source()`. dbt-debt finds these by reading the model's SQL, so it needs no
   extra BigQuery permission and shows up even if it can't list the entire warehouse tables.

@@ -77,8 +77,16 @@ def _column_card() -> Scorecard:
             unused=623,
             removable=600,
             dead_columns=(
-                DeadColumn("dim_customer", "old_marketing_score", False, "models/dim_customer.sql"),
-                DeadColumn("fct_orders", "amount", True, "models/fct_orders.sql"),
+                DeadColumn(
+                    "model.p.dim_customer",
+                    "dim_customer",
+                    "old_marketing_score",
+                    False,
+                    "models/dim_customer.sql",
+                ),
+                DeadColumn(
+                    "model.p.fct_orders", "fct_orders", "amount", True, "models/fct_orders.sql"
+                ),
             ),
         ),
     )
@@ -199,7 +207,9 @@ def test_detail_lists_both_dead_models_and_columns_in_column_mode() -> None:
             active=2,
             unused=1,
             removable=1,
-            dead_columns=(DeadColumn("fct_orders", "amount", False, "models/fct.sql"),),
+            dead_columns=(
+                DeadColumn("model.p.fct_orders", "fct_orders", "amount", False, "models/fct.sql"),
+            ),
         ),
     )
     out = render_text(card, detail=True)

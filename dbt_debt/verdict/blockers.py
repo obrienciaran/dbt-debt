@@ -15,8 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from dbt_debt.domain import Manifest
-from dbt_debt.verdict import ColumnRef
+from dbt_debt.domain import ColumnRef, Manifest
 
 
 @dataclass(frozen=True)

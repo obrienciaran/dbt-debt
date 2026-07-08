@@ -151,20 +151,30 @@ class CachingBigQueryClient:
         self._write(path, encode(value))
         return value
 
+    @staticmethod
+    def _load_entry(path: Path) -> tuple[datetime, object] | None:
+        """Parse a cache file into (created, data), or None when it is missing or corrupt.
+
+        Any malformed file — unreadable, not JSON, not a dict, missing or mistyped fields —
+        reads as None so a damaged cache degrades to a miss instead of crashing the scan.
+        """
+
+        try:
+            entry = json.loads(path.read_text())
+            return datetime.fromisoformat(entry["created"]), entry["data"]
+        except (ValueError, KeyError, TypeError, OSError):
+            return None
+
     def _read(self, path: Path) -> object | None:
         """Return the cached payload, or None when absent or expired (expired files are removed)."""
 
-        if not path.exists():
+        entry = self._load_entry(path)
+        if entry is None:
             return None
-        try:
-            entry = json.loads(path.read_text())
-            created = datetime.fromisoformat(entry["created"])
-        except (ValueError, KeyError, OSError):
-            return None
+        created, data = entry
         if datetime.now(timezone.utc) - created > self._ttl:
             path.unlink(missing_ok=True)
             return None
-        data: object = entry["data"]
         return data
 
     def _write(self, path: Path, data: object) -> None:
@@ -172,14 +182,10 @@ class CachingBigQueryClient:
         path.write_text(json.dumps(entry))
 
     def _prune(self) -> None:
-        """Delete every expired entry in the cache directory — the teardown that bounds growth."""
+        """Delete every expired or corrupt entry in the cache directory — the teardown that bounds growth."""
 
         now = datetime.now(timezone.utc)
         for path in self._dir.glob("*.json"):
-            try:
-                created = datetime.fromisoformat(json.loads(path.read_text())["created"])
-            except (ValueError, KeyError, OSError):
-                path.unlink(missing_ok=True)
-                continue
-            if now - created > self._ttl:
+            entry = self._load_entry(path)
+            if entry is None or now - entry[0] > self._ttl:
                 path.unlink(missing_ok=True)

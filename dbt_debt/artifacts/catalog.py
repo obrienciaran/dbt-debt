@@ -65,7 +65,9 @@ def parse_catalog(data: dict[str, Any]) -> Catalog:
 def _parse_node(unique_id: str, node: dict[str, Any]) -> CatalogNode:
     metadata = as_dict(node.get("metadata"))
     key = relation_key(metadata.get("database"), metadata.get("schema"), metadata.get("name"))
-    columns = tuple(as_dict(node.get("columns")).keys())
+    # Lowercased to match the manifest parser and the parsed query text, so a mixed-case column
+    # like `UserID` still joins against its (lowercased) consumption and lineage refs.
+    columns = tuple(name.lower() for name in as_dict(node.get("columns")))
     return CatalogNode(
         unique_id=unique_id,
         relation_key=key,

@@ -118,6 +118,19 @@ def test_corrupt_entry_is_treated_as_a_miss(tmp_path: Path) -> None:
     assert inner.calls["table_usage"] == 1
 
 
+def test_valid_json_of_the_wrong_shape_is_also_a_miss(tmp_path: Path) -> None:
+    # Regression: a cache file holding a JSON list (not the expected dict) used to raise an
+    # uncaught TypeError from the prune sweep and kill the scan.
+    inner = FakeBigQueryClient(query_texts=["q"])
+    _client(inner, tmp_path).query_texts()
+    for path in tmp_path.glob("*.json"):
+        path.write_text("[1, 2]")
+
+    fresh_inner = FakeBigQueryClient(query_texts=["q"])
+    assert _client(fresh_inner, tmp_path).query_texts() == ["q"]
+    assert fresh_inner.calls["query_texts"] == 1
+
+
 def test_cache_dir_for_is_under_temp_and_project_specific(tmp_path: Path) -> None:
     a = cache_dir_for(tmp_path / "project_a")
     b = cache_dir_for(tmp_path / "project_b")

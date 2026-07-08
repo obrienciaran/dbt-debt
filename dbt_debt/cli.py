@@ -16,8 +16,13 @@ from dbt_debt.artifacts.catalog import Catalog, load_catalog
 from dbt_debt.artifacts.graph import Graph
 from dbt_debt.artifacts.manifest import load_manifest
 from dbt_debt.config import DEFAULT_QUERY_COMMENT_PATTERN, Config
-from dbt_debt.consumption.client import BigQueryClient, MissingPermissionError
+from dbt_debt.consumption.client import (
+    BigQueryClient,
+    MissingCredentialsError,
+    MissingPermissionError,
+)
 from dbt_debt.consumption.columns import consumed_model_columns
+from dbt_debt.consumption.exclusion import validate_query_comment_pattern
 from dbt_debt.domain import Manifest, WarehouseRelation
 from dbt_debt.lineage.sqlglot_source import SqlglotLineage
 from dbt_debt.references import model_relation_references
@@ -109,7 +114,7 @@ def _column_report(
 
     schema = build_schema(catalog.relation_columns())
     consumed = consumed_model_columns(client.query_texts(), schema, manifest.relation_to_id())
-    edges = SqlglotLineage(manifest, catalog).edges()
+    edges = SqlglotLineage(manifest, catalog, schema=schema).edges()
     return build_column_report(manifest, catalog, consumed, edges, storage)
 
 
@@ -181,6 +186,7 @@ def _config_from_args(args: argparse.Namespace) -> Config:
         query_comment_pattern=args.query_comment_pattern,
         columns=args.columns,
         output_format=args.format,
+        top_n=args.top_n,
         cache=args.cache,
         cache_ttl_hours=args.cache_ttl,
     )
@@ -188,6 +194,11 @@ def _config_from_args(args: argparse.Namespace) -> Config:
 
 def _run_scan(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    try:
+        validate_query_comment_pattern(config.query_comment_pattern)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if args.clear_cache:
         _clear_project_cache(config.project_dir)
     if not config.manifest_path.exists():
@@ -206,7 +217,7 @@ def _run_scan(args: argparse.Namespace) -> int:
         client: BigQueryClient = RealBigQueryClient(config, project=project)
         client = _wrap_cache(client, config, project)
         scorecard = _scan(config, client, manifest)
-    except MissingPermissionError as exc:
+    except (MissingCredentialsError, MissingPermissionError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
 
@@ -233,8 +244,8 @@ def _clear_project_cache(project_dir: Path) -> None:
     print("cleared this project's scan cache.", file=sys.stderr)
 
 
-def _clear_all_cache() -> int:
-    """Delete every project's cached results — the bare `dbt-debt --clear-cache`, no scan."""
+def _clear_all_cache() -> None:
+    """Delete every project's cached results — the top-level `dbt-debt --clear-cache`."""
 
     import shutil
 
@@ -242,7 +253,6 @@ def _clear_all_cache() -> int:
 
     shutil.rmtree(cache_root(), ignore_errors=True)
     print("cleared the dbt-debt cache.", file=sys.stderr)
-    return 0
 
 
 def _wrap_cache(client: BigQueryClient, config: Config, project: str | None) -> BigQueryClient:
@@ -294,10 +304,15 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="dbt-debt",
         description="A technical-debt scorecard for dbt projects on BigQuery.",
     )
+    # A distinct dest from scan's own --clear-cache: argparse lets a subparser's defaults
+    # overwrite values the top-level parser already set, so sharing one dest would make
+    # `dbt-debt --clear-cache scan` silently drop the flag.
     parser.add_argument(
         "--clear-cache",
+        dest="clear_all_cache",
         action="store_true",
-        help="Delete all of dbt-debt's cached results and exit, without running a scan.",
+        help="Delete all of dbt-debt's cached results (every project), then exit unless a "
+        "command follows.",
     )
     subparsers = parser.add_subparsers(dest="command", required=False)
 
@@ -326,6 +341,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Analyse columns too (which are unused), not just whole models.",
     )
     scan.add_argument("--format", choices=["text", "json"], default="text")
+    scan.add_argument(
+        "--top-n",
+        type=int,
+        default=10,
+        help="How many unused assets the summary list shows (default: 10).",
+    )
     scan.add_argument(
         "--detail",
         action="store_true",
@@ -371,9 +392,11 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.clear_all_cache:
+        _clear_all_cache()
+        if args.command is None:
+            return 0
     if args.command is None:
-        if args.clear_cache:
-            return _clear_all_cache()
         parser.print_help(sys.stderr)
         return 2
     return int(args.func(args))

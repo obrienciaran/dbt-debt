@@ -55,8 +55,8 @@ record against the tables actually in the warehouse and flags two kinds of gap:
   outside the DAG and is never tracked or tested. Fix it by declaring it in a `sources.yml` file
   and referencing it with `{{ source() }}`.
 
-Two rules keep these honest: we only look inside the datasets dbt builds into (so raw input tables
-are never flagged), and a table a model reads always counts as undeclared, never as an orphan.
+Two rules. We only look inside the datasets dbt builds into so raw input tables
+are never flagged, and a table a model reads always counts as undeclared, never as an orphan.
 
 ## 🎯 What counts as "usage"
 

@@ -151,7 +151,7 @@ key-pair setup is done once:
    ```
 
 2. Register the public key on your Snowflake user. In a Snowsight worksheet, paste the contents
-   of `snowflake_key.pub` without the BEGIN/END lines, as one long line:
+   of `snowflake_key.pub` as one long line:
 
    ```sql
    ALTER USER MY_USER SET RSA_PUBLIC_KEY='MIIB...';

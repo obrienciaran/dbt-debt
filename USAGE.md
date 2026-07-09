@@ -240,13 +240,15 @@ dbt-debt scan
     --stale-source-days 30    declared sources with no new data for more than this many days
                               are stale (0 disables the check)
     --top-n 10                how many unused assets the summary list shows
-    --detail                  list every unused table and column (grouped by model, with file paths)
+    --print                   print the full report instead of opening the viewer (every unused
+                              table and column, grouped by model, with file paths)
     --format text|json        json always includes the full list
     -o, --output <file>       write the report to a file instead of the screen
-    --no-interactive          print the report instead of opening the viewer
     --orphans                 print only the orphan and undeclared-source report
     --no-cache                ask the warehouse directly, ignoring (and not writing) saved results
-    --cache-ttl 1             how many hours saved results stay fresh before being re-fetched (refreshes on a new session)
+    --cache-ttl 1             how many hours saved results stay fresh before being re-fetched;
+                              remembered per entry, so it survives closing the terminal
+                              (passing the flag again overrides the remembered value)
     --clear-cache             clear this project's saved results, then run a fresh scan
 ```
 

@@ -47,7 +47,11 @@ class Config:
     output_format: str = "text"
     top_n: int = 10
     cache: bool = True
-    cache_ttl_hours: float = 1.0
+    cache_ttl_hours: float | None = None
+    """An explicit `--cache-ttl`; None means unspecified — new entries get the 1h default and
+    existing entries keep the TTL they were written with."""
+
+    DEFAULT_CACHE_TTL_HOURS = 1.0
 
     @property
     def dialect(self) -> str:

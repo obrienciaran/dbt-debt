@@ -3,7 +3,8 @@
 Mirrors the target mock-up at model grain: active/unused counts, the manifest-only savings
 (removable tests), and the storage-ranked top dead assets. Column lines
 appear once the column stage populates them. By default only the top few dead assets are shown;
-`--detail` appends the complete list grouped by model, with each model's file path.
+`--print` (the renderer's `detail` flag) appends the complete list grouped by model, with each
+model's file path.
 """
 
 from __future__ import annotations
@@ -182,11 +183,12 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
 
 
 def _detail_section(scorecard: Scorecard) -> list[str]:
-    """The full, un-truncated breakdown appended under `--detail`: dead tables, then dead columns.
+    """The full, un-truncated breakdown of the Detail view and `--print`: tables, then columns.
 
     Whole unused models are always listed; the per-column breakdown is added when the column stage
-    (`--columns`) ran, so column scans show both grains rather than columns alone. The orphan
-    breakdown follows when orphan analysis ran.
+    (`--columns`) ran, so column scans show both grains rather than columns alone. The remaining
+    sections follow the summary's order — sources, docs drift, orphans, then the removable tests
+    under "potential savings".
     """
 
     lines = _detail_models(scorecard.dead_models)
@@ -218,6 +220,17 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
         lines += _detail_phantom_columns(scorecard.phantom_columns)
     if scorecard.orphans is not None:
         lines += _detail_orphans(scorecard.orphans)
+    if scorecard.removable_tests:
+        lines += _detail_removable_tests(scorecard.removable_tests)
+    return lines
+
+
+def _detail_removable_tests(test_ids: tuple[str, ...]) -> list[str]:
+    """Each removable test by unique_id — removable only once the dead asset it guards goes."""
+
+    lines = ["", f"Removable tests ({len(test_ids)}):"]
+    lines += [f"  - {test_id}" for test_id in test_ids]
+    lines.append("  (removable once the unused model or column each one guards is removed)")
     return lines
 
 
@@ -283,13 +296,13 @@ def _coverage_lines(cov: Coverage) -> list[str]:
         "Coverage:",
         f"  - tests: {cov.tested_models} of {_plural(cov.total_models, 'model')} have at "
         f"least one test ({_pct(cov.tested_models, cov.total_models)})",
-        f"  - docs: {cov.documented_models} of {_plural(cov.total_models, 'model')} have a "
+        f"  - model docs: {cov.documented_models} of {_plural(cov.total_models, 'model')} have a "
         f"description ({_pct(cov.documented_models, cov.total_models)})",
     ]
     if cov.total_columns:
         source = "catalog" if cov.column_source == "catalog" else "declared"
         lines.append(
-            f"  - docs: {cov.documented_columns} of {_plural(cov.total_columns, 'column')} "
+            f"  - column docs: {cov.documented_columns} of {_plural(cov.total_columns, 'column')} "
             f"have a description ({_pct(cov.documented_columns, cov.total_columns)}, "
             f"{source} columns)"
         )
@@ -314,7 +327,7 @@ def _orphan_summary_lines(orphans: OrphanReport) -> list[str]:
 
 
 def _detail_orphans(orphans: OrphanReport) -> list[str]:
-    """The full orphan breakdown under `--detail`: orphaned relations, then undeclared sources."""
+    """The full orphan breakdown in the detail view: orphaned relations, then undeclared sources."""
 
     lines: list[str] = []
     if orphans.orphans_checked:

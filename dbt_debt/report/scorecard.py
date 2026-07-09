@@ -172,7 +172,7 @@ class ColumnReport:
     """The column-grain section, present only when column analysis (`--columns`) ran.
 
     `dead_columns` is the complete ranked list (not truncated); the text renderer shows the top
-    few by default and the whole thing under `--detail`, while JSON always carries all of it.
+    few by default and the whole thing in the detail view, while JSON always carries all of it.
     """
 
     active: int

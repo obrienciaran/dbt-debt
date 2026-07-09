@@ -365,7 +365,7 @@ def _run_scan(args: argparse.Namespace) -> int:
 
         if run_viewer(scorecard, config):
             return 0
-    return _emit(_render(scorecard, config, args.detail), args.output)
+    return _emit(_render(scorecard, config, args.print_report), args.output)
 
 
 def _clear_project_cache(project_dir: Path) -> None:
@@ -403,6 +403,14 @@ def _wrap_cache(client: WarehouseClient, config: Config, project: str | None) ->
 
     from dbt_debt.consumption.cache import CachingWarehouseClient, cache_dir_for
 
+    # An explicit --cache-ttl governs this run outright; otherwise each entry keeps the TTL it
+    # was written with, so `--cache-ttl 2` outlives the session that passed it.
+    explicit = config.cache_ttl_hours is not None
+    ttl_hours = (
+        config.cache_ttl_hours
+        if config.cache_ttl_hours is not None
+        else Config.DEFAULT_CACHE_TTL_HOURS
+    )
     key_parts = {
         "warehouse": config.warehouse,
         "connection": config.connection or "",
@@ -414,20 +422,21 @@ def _wrap_cache(client: WarehouseClient, config: Config, project: str | None) ->
     return CachingWarehouseClient(
         client,
         cache_dir=cache_dir_for(config.project_dir),
-        ttl=timedelta(hours=config.cache_ttl_hours),
+        ttl=timedelta(hours=ttl_hours),
         key_parts=key_parts,
+        honor_entry_ttl=not explicit,
     )
 
 
 def _should_view(config: Config, args: argparse.Namespace) -> bool:
     """Open the interactive viewer only with no competing output intent, in a drivable terminal.
 
-    Any explicit output flag (`--detail`, `--format json`, `-o`, `--no-interactive`) means the
-    caller wants plain output — for a pipe, a file, or a script — so the viewer stays out of the
-    way. Otherwise a human at a real terminal gets the tabbed report by default.
+    Any explicit output flag (`--print`, `--format json`, `-o`, `--orphans`) means the caller
+    wants plain output — for a pipe, a file, or a script — so the viewer stays out of the way.
+    Otherwise a human at a real terminal gets the tabbed report by default.
     """
 
-    if args.no_interactive or args.detail or args.orphans or args.output is not None:
+    if args.print_report or args.orphans or args.output is not None:
         return False
     if config.output_format != "text":
         return False
@@ -521,20 +530,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="How many unused assets the summary list shows (default: 10).",
     )
     scan.add_argument(
-        "--detail",
+        "--print",
+        dest="print_report",
         action="store_true",
-        help="List every unused asset (grouped by model, with file paths), not just the top few.",
+        help="Print the full plain-text report (every unused asset, grouped by model, with "
+        "file paths) instead of opening the interactive viewer.",
     )
     scan.add_argument(
         "-o",
         "--output",
         default=None,
         help="Write the report to this file instead of stdout (e.g. --format json -o debt.json).",
-    )
-    scan.add_argument(
-        "--no-interactive",
-        action="store_true",
-        help="Print the report instead of opening the interactive viewer (for scripts/non-TTY).",
     )
     scan.add_argument(
         "--orphans",
@@ -550,8 +556,9 @@ def _build_parser() -> argparse.ArgumentParser:
     scan.add_argument(
         "--cache-ttl",
         type=float,
-        default=1.0,
-        help="Hours a cached scan stays valid before it is re-fetched (default: 1).",
+        default=None,
+        help="Hours a cached scan stays valid before it is re-fetched (default: 1). Remembered "
+        "per entry, so it persists across sessions; passing the flag overrides stored values.",
     )
     scan.add_argument(
         "--clear-cache",

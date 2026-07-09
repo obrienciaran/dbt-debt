@@ -99,6 +99,51 @@ def test_expired_entry_is_refetched_and_removed(tmp_path: Path) -> None:
     assert inner.calls["table_usage"] == 2
 
 
+def test_entry_ttl_outlives_the_session_that_set_it(tmp_path: Path) -> None:
+    # Written under a 2h TTL, an entry stays valid for 2h even when a later run (a fresh
+    # client with the 1h default) would have expired it — the TTL is a property of the entry.
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
+    _client(inner, tmp_path, ttl=timedelta(hours=2)).table_usage()
+    (path,) = list(tmp_path.glob("*.json"))
+    _backdate(path, hours=1.5)
+
+    later = FakeWarehouseClient(usage=[UsageRow("a.b.c", 99)])
+    default_run = _client(later, tmp_path, ttl=timedelta(hours=1))
+    assert default_run.table_usage() == [UsageRow("a.b.c", 3)]
+    assert later.calls["table_usage"] == 0
+
+
+def test_explicit_ttl_overrides_the_stored_one(tmp_path: Path) -> None:
+    # honor_entry_ttl=False is the explicit --cache-ttl path: this run's value governs, so the
+    # same 1.5h-old entry written under 2h is expired by an explicit 1h.
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
+    _client(inner, tmp_path, ttl=timedelta(hours=2)).table_usage()
+    (path,) = list(tmp_path.glob("*.json"))
+    _backdate(path, hours=1.5)
+
+    later = FakeWarehouseClient(usage=[UsageRow("a.b.c", 99)])
+    explicit_run = CachingWarehouseClient(
+        later, cache_dir=tmp_path, ttl=timedelta(hours=1), key_parts=_KEY, honor_entry_ttl=False
+    )
+    assert explicit_run.table_usage() == [UsageRow("a.b.c", 99)]
+    assert later.calls["table_usage"] == 1
+
+
+def test_entry_without_a_stored_ttl_uses_the_run_ttl(tmp_path: Path) -> None:
+    # An entry from before TTLs were stored per entry falls back to this run's TTL.
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
+    _client(inner, tmp_path, ttl=timedelta(hours=1)).table_usage()
+    (path,) = list(tmp_path.glob("*.json"))
+    entry = json.loads(path.read_text())
+    del entry["ttl_hours"]
+    path.write_text(json.dumps(entry))
+    _backdate(path, hours=2)
+
+    later = FakeWarehouseClient(usage=[UsageRow("a.b.c", 99)])
+    assert _client(later, tmp_path, ttl=timedelta(hours=1)).table_usage() == [UsageRow("a.b.c", 99)]
+    assert later.calls["table_usage"] == 1
+
+
 def test_prune_on_construction_removes_old_files(tmp_path: Path) -> None:
     inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
     _client(inner, tmp_path).table_usage()

@@ -67,7 +67,7 @@ dbt_debt/
   report/
     scorecard.py         # put the result together
     render_text.py / render_json.py
-    viewer.py            # the interactive tabbed viewer (Summary / Detail / JSON / Export), stdlib-only
+    viewer.py            # the interactive tabbed viewer (Summary / Detail / JSON / Export / Help), stdlib-only
     spinner.py           # a "working..." spinner shown only while the slow warehouse steps run
 ```
 
@@ -350,12 +350,20 @@ answer (warehouse, project, region, lookback window, and which queries count as 
 deliberately never by your dbt project. The permission preflight is never cached, because
 permissions can change and that check is load-bearing.
 
-Each saved file carries its creation time. Past the time-to-keep (default 1 hour) it counts as
-a miss, and expired files are swept at the start of the next scan by our own code, so cleanup
-behaves the same on every OS (Windows never clears its temp folder on reboot). Clearing by
-hand has two forms. `dbt-debt --clear-cache` deletes the whole cache folder and stops;
-`dbt-debt scan --clear-cache` clears this project's results and then scans fresh. `--no-cache`
-skips the cache entirely.
+Each saved file carries its creation time **and the time-to-keep it was written under** —
+`--cache-ttl` is not a setting stored anywhere; it persists across sessions only because every
+entry records its own lifetime (`created` + `ttl_hours` inside the JSON file, which lives in
+the OS temp directory and so outlives the terminal session). A later flag-less run judges each
+entry against the entry's own TTL; passing `--cache-ttl` explicitly overrides the stored values
+for that run, in both directions (it can extend or force-shorten). Because the TTL lives in the
+entries, clearing the cache also clears the remembered TTL — the next scan writes fresh entries
+at the default (1 hour) unless the flag is passed again.
+
+Past its time-to-keep an entry counts as a miss, and expired files are swept at the start of
+the next scan by our own code, so cleanup behaves the same on every OS (Windows never clears
+its temp folder on reboot). Clearing by hand has two forms. `dbt-debt --clear-cache` deletes
+the whole cache folder and stops; `dbt-debt scan --clear-cache` clears this project's results
+and then scans fresh. `--no-cache` skips the cache entirely — it neither reads nor writes.
 
 ## Why build a new tool
 

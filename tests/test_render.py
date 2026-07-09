@@ -188,8 +188,8 @@ def test_render_text_coverage_sentences_and_unpartitioned_tables() -> None:
     text = render_text(card, detail=True)
     assert "Coverage:" in text
     assert "- tests: 2 of 3 models have at least one test (67%)" in text
-    assert "- docs: 1 of 3 models have a description (33%)" in text
-    assert "- docs: 4 of 10 columns have a description (40%, catalog columns)" in text
+    assert "- model docs: 1 of 3 models have a description (33%)" in text
+    assert "- column docs: 4 of 10 columns have a description (40%, catalog columns)" in text
     assert "Large tables with neither partition_by nor cluster_by (1" in text
     assert "- events (12.0 GB, table)" in text
     assert "models/events.sql" in text
@@ -375,6 +375,43 @@ def test_detail_lists_both_dead_models_and_columns_in_column_mode() -> None:
     assert "    - amount" in out
     # Models come before columns in the breakdown.
     assert out.index("Unused models (1):") < out.index("Unused columns (1):")
+
+
+def test_render_text_detail_lists_removable_tests() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=0,
+        unused_models=1,
+        removable_tests=("test.p.not_null_fct_order_id.abc123",),
+        dead_models=(DeadModel("model.x.fct", "fct", "p.d.fct", 0),),
+    )
+    summary = render_text(card)
+    assert "- 1 test removable" in summary
+    assert "Removable tests (" not in summary  # itemized only in the detail view
+
+    detail = render_text(card, detail=True)
+    assert "Removable tests (1):" in detail
+    assert "  - test.p.not_null_fct_order_id.abc123" in detail
+    assert "removable once the unused model or column each one guards is removed" in detail
+
+
+def test_detail_orders_orphans_before_removable_tests() -> None:
+    # The breakdown mirrors the summary's order: models, orphans, then the savings.
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=0,
+        unused_models=1,
+        removable_tests=("t1",),
+        dead_models=(DeadModel("model.x.fct", "fct", "p.d.fct", 0),),
+        orphans=OrphanReport(
+            orphaned_relations=(WarehouseRelation("p.d.tmp_old", "BASE TABLE"),),
+            orphans_checked=True,
+        ),
+    )
+    detail = render_text(card, detail=True)
+    assert detail.index("Orphaned tables (1):") < detail.index("Removable tests (1):")
 
 
 def test_render_text_lists_unused_sources_with_query_evidence() -> None:

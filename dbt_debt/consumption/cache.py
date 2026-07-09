@@ -8,10 +8,14 @@ never the manifest, which
 warehouse results don't depend on. The permission preflight is delegated, never cached, because
 permissions can change and the check is load-bearing.
 
-Entries carry their creation time and expire after `ttl`: an expired read is a miss (and the file
-is removed), and every cache directory is pruned of expired files on construction. That TTL prune
-is the guaranteed, cross-platform teardown — important because Windows does not clear its temp
-directory on reboot the way Unix clears `/tmp`. The cache therefore cannot persist forever.
+Entries carry their creation time *and the TTL they were written under*: an expired read is a
+miss (and the file is removed), and every cache directory is pruned of expired files on
+construction. Storing the TTL per entry is what makes `--cache-ttl 2` outlive the session that
+passed it — a later flag-less run honors each entry's own lifetime rather than re-judging it
+against the default. An explicit `--cache-ttl` on the current run overrides the stored values
+(`honor_entry_ttl=False`), in both directions. The TTL prune is the guaranteed, cross-platform
+teardown — important because Windows does not clear its temp directory on reboot the way Unix
+clears `/tmp`. The cache therefore cannot persist forever.
 """
 
 from __future__ import annotations
@@ -108,10 +112,12 @@ class CachingWarehouseClient:
         cache_dir: Path,
         ttl: timedelta,
         key_parts: Mapping[str, str],
+        honor_entry_ttl: bool = True,
     ) -> None:
         self._inner = inner
         self._dir = cache_dir
         self._ttl = ttl
+        self._honor_entry_ttl = honor_entry_ttl
         self._key_parts = dict(key_parts)
         self._disabled = False
         try:
@@ -197,18 +203,28 @@ class CachingWarehouseClient:
         print(f"scan cache disabled ({exc}); querying the warehouse live.", file=sys.stderr)
 
     @staticmethod
-    def _load_entry(path: Path) -> tuple[datetime, object] | None:
-        """Parse a cache file into (created, data), or None when it is missing or corrupt.
+    def _load_entry(path: Path) -> tuple[datetime, timedelta | None, object] | None:
+        """Parse a cache file into (created, own ttl, data), or None when missing or corrupt.
 
         Any malformed file — unreadable, not JSON, not a dict, missing or mistyped fields —
-        reads as None so a damaged cache degrades to a miss instead of crashing the scan.
+        reads as None so a damaged cache degrades to a miss instead of crashing the scan. The
+        ttl is None for entries written before it was stored per entry.
         """
 
         try:
             entry = json.loads(path.read_text())
-            return datetime.fromisoformat(entry["created"]), entry["data"]
-        except (ValueError, KeyError, TypeError, OSError):
+            ttl_hours = entry.get("ttl_hours")
+            ttl = timedelta(hours=ttl_hours) if isinstance(ttl_hours, (int, float)) else None
+            return datetime.fromisoformat(entry["created"]), ttl, entry["data"]
+        except (ValueError, KeyError, TypeError, AttributeError, OSError):
             return None
+
+    def _effective_ttl(self, entry_ttl: timedelta | None) -> timedelta:
+        """The entry's own lifetime when we honor stored TTLs, else this run's."""
+
+        if self._honor_entry_ttl and entry_ttl is not None:
+            return entry_ttl
+        return self._ttl
 
     def _read(self, path: Path) -> object | None:
         """Return the cached payload, or None when absent or expired (expired files are removed)."""
@@ -216,15 +232,19 @@ class CachingWarehouseClient:
         entry = self._load_entry(path)
         if entry is None:
             return None
-        created, data = entry
-        if datetime.now(timezone.utc) - created > self._ttl:
+        created, entry_ttl, data = entry
+        if datetime.now(timezone.utc) - created > self._effective_ttl(entry_ttl):
             with suppress(OSError):
                 path.unlink(missing_ok=True)
             return None
         return data
 
     def _write(self, path: Path, data: object) -> None:
-        entry = {"created": datetime.now(timezone.utc).isoformat(), "data": data}
+        entry = {
+            "created": datetime.now(timezone.utc).isoformat(),
+            "ttl_hours": self._ttl / timedelta(hours=1),
+            "data": data,
+        }
         path.write_text(json.dumps(entry))
 
     def _prune(self) -> None:
@@ -233,5 +253,5 @@ class CachingWarehouseClient:
         now = datetime.now(timezone.utc)
         for path in self._dir.glob("*.json"):
             entry = self._load_entry(path)
-            if entry is None or now - entry[0] > self._ttl:
+            if entry is None or now - entry[0] > self._effective_ttl(entry[1]):
                 path.unlink(missing_ok=True)

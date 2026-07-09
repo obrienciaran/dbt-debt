@@ -1,4 +1,4 @@
-"""Interactive terminal viewer: tabbed Summary / Detail / JSON / Export over one `Scorecard`.
+"""Interactive terminal viewer: tabbed Summary / Detail / JSON / Export / Help over one `Scorecard`.
 
 Stdlib-only, no third-party dependency. A Unix backend (`termios`/`tty`) and a Windows backend
 (`msvcrt`, with VT enabled via `ctypes`) feed a shared, pure draw routine; ANSI escapes do the
@@ -13,6 +13,7 @@ are unit-tested; the small IO loop and the Windows backend are exercised on a re
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from collections.abc import Callable, Iterator
@@ -37,8 +38,31 @@ _ALT_ON, _ALT_OFF = "\x1b[?1049h", "\x1b[?1049l"
 _HIDE, _SHOW = "\x1b[?25l", "\x1b[?25h"
 _CLEAR = "\x1b[H\x1b[2J"
 _REVERSE, _RESET, _DIM = "\x1b[7m", "\x1b[0m", "\x1b[2m"
+_BOLD = "\x1b[1m"
+_CYAN, _GREEN, _RED, _YELLOW = "\x1b[36m", "\x1b[32m", "\x1b[31m", "\x1b[33m"
 
 EXPORT_FILE = "dbt_debt_report.json"
+
+_BANNER = (
+    "      $$\\ $$\\        $$\\                 $$\\           $$\\        $$\\",
+    "      $$ |$$ |       $$ |                $$ |          $$ |       $$ |",
+    " $$$$$$$ |$$$$$$$\\ $$$$$$\\          $$$$$$$ | $$$$$$\\  $$$$$$$\\ $$$$$$\\",
+    "$$  __$$ |$$  __$$\\\\_$$  _|        $$  __$$ |$$  __$$\\ $$  __$$\\\\_$$  _|",
+    "$$ /  $$ |$$ |  $$ | $$ |          $$ /  $$ |$$$$$$$$ |$$ |  $$ | $$ |",
+    "$$ |  $$ |$$ |  $$ | $$ |$$\\       $$ |  $$ |$$   ____|$$ |  $$ | $$ |$$\\",
+    "\\$$$$$$$ |$$$$$$$  | \\$$$$  |      \\$$$$$$$ |\\$$$$$$$\\ $$$$$$$  | \\$$$$  |",
+    " \\_______|\\_______/   \\____/        \\_______| \\_______|\\_______/   \\____/",
+)
+_BANNER_CHARS = frozenset("$\\/_| ")
+
+# One 256-colour code per banner row, red at the top through magenta at the bottom. The viewer
+# already requires VT processing, where 256-colour support is universal.
+_RAINBOW = tuple(f"\x1b[38;5;{n}m" for n in (196, 208, 226, 118, 51, 39, 129, 201))
+
+# The review glyphs (! ~ ?) are all neutral findings, so they share one colour.
+_GLYPH_COLORS = {"✓": _GREEN, "✗": _RED, "!": _YELLOW, "~": _YELLOW, "?": _YELLOW}
+
+_PCT = re.compile(r"\d+%")
 
 _UNIX_KEYS: dict[bytes, str] = {
     b"\x1b[A": "up",
@@ -61,6 +85,7 @@ _UNIX_KEYS: dict[bytes, str] = {
     b"2": "2",
     b"3": "3",
     b"4": "4",
+    b"5": "5",
     b"q": "quit",
     b"\x1b": "quit",
     b"\x03": "quit",
@@ -89,6 +114,7 @@ _WIN_CHARS: dict[str, str] = {
     "2": "2",
     "3": "3",
     "4": "4",
+    "5": "5",
     "q": "quit",
     "\x1b": "quit",
     "\x03": "quit",
@@ -100,13 +126,57 @@ class _SetupError(Exception):
 
 
 def build_views(scorecard: Scorecard, top_n: int) -> list[tuple[str, list[str]]]:
-    """The three view tabs, each a (label, lines) pair over the same scorecard."""
+    """The three view tabs, each a (label, lines) pair over the same scorecard.
 
+    The Summary tab opens with the banner; the Detail tab skips it to stay dense. Lines are kept
+    plain here — colour is applied per line at draw time, after width truncation.
+    """
+
+    summary = [*_BANNER, "", *render_text(scorecard, top_n=top_n).splitlines()]
     return [
-        ("Summary", render_text(scorecard, top_n=top_n).splitlines()),
+        ("Summary", summary),
         ("Detail", render_text(scorecard, detail=True, top_n=top_n).splitlines()),
         ("JSON", render_json(scorecard).splitlines()),
     ]
+
+
+def colorize_line(line: str) -> str:
+    """Colour one already-truncated report line: banner art, section headers, status glyphs.
+
+    Pure string-in string-out, keyed on shape alone: banner lines are drawn from the figlet
+    character set, headers are unindented and end with a colon, and a leading status glyph is
+    coloured by its meaning (✓ good, ✗ bad; ! ~ ? are neutral review flags). Coverage
+    percentages get traffic-light colours. JSON and Help lines match none of these and pass
+    through unchanged. Runs after `[:width]` truncation so escape
+    codes are never sliced mid-sequence; plain (piped) output never passes through here.
+    """
+
+    stripped = line.strip()
+    if not stripped:
+        return line
+    if set(stripped) <= _BANNER_CHARS:
+        # Rainbow gradient, one colour per banner row; a prefix match keeps the right colour
+        # even when the line was truncated for a narrow terminal.
+        row_color = next((c for row, c in zip(_BANNER, _RAINBOW) if row.startswith(line)), _CYAN)
+        return f"{row_color}{line}{_RESET}"
+    if not line[0].isspace() and line.endswith(":"):
+        return f"{_BOLD}{line}{_RESET}"
+    glyph = stripped[0]
+    color = _GLYPH_COLORS.get(glyph)
+    if color is not None:
+        start = line.index(glyph)
+        return f"{line[:start]}{color}{glyph}{_RESET}{line[start + 1 :]}"
+    if "%" in line:
+        return _PCT.sub(lambda m: f"{_pct_color(int(m.group()[:-1]))}{m.group()}{_RESET}", line)
+    return line
+
+
+def _pct_color(value: int) -> str:
+    """Traffic-light a coverage percentage: green from 80%, yellow from 30%, red below."""
+
+    if value >= 80:
+        return _GREEN
+    return _YELLOW if value >= 30 else _RED
 
 
 def export_pane(json_text: str, written_to: str | None, error: str | None = None) -> list[str]:
@@ -137,6 +207,51 @@ def write_report(json_text: str, filename: str = EXPORT_FILE) -> str:
     return str(Path(filename).resolve())
 
 
+def help_pane() -> list[str]:
+    """The Help tab: the scan flags and a few example commands, mirroring the CLI's --help."""
+
+    return [
+        "",
+        "  Flags for dbt-debt scan",
+        "",
+        "    --project-dir DIR          dbt project root (default: current directory)",
+        "    --target-path DIR          where manifest.json / catalog.json live (default: target)",
+        "    --warehouse NAME           bigquery or snowflake (default: manifest adapter_type)",
+        "    --project NAME             GCP project / Snowflake database (default: inferred)",
+        "    --region REGION            BigQuery region for INFORMATION_SCHEMA (default: US)",
+        "    --connection NAME          named Snowflake connection from connections.toml",
+        "    --lookback-days N          usage window in days (default: 180; JOBS keeps ~180)",
+        "    --columns                  analyse columns too, not just whole models",
+        "    --min-age-days N           younger relations are 'too new to judge' (default: 7)",
+        "    --rare-threshold N         at most N queries lands in 'rarely used' (default: 5)",
+        "    --stale-source-days N      no new data for N+ days marks a source stale (default: 30)",
+        "    --query-comment-pattern P  regex for dbt's own queries, excluded from usage",
+        "    --top-n N                  how many unused assets the summary shows (default: 10)",
+        "    --print                    print the full plain-text report (no viewer)",
+        "    --format text|json         output format (json skips this viewer)",
+        "    -o, --output FILE          write the report to a file instead of stdout",
+        "    --orphans                  print only the orphan / undeclared-source report",
+        "    --no-cache                 always query the warehouse live, skipping the cache",
+        "    --cache-ttl HOURS          hours a cached scan stays valid (default: 1; persists)",
+        "    --clear-cache              clear this project's cache first, then scan fresh",
+        "",
+        "  Examples",
+        "",
+        "    dbt-debt scan                              scan the dbt project in this directory",
+        "    dbt-debt scan --columns                    include column-level verdicts",
+        "    dbt-debt scan --min-age-days 0             judge freshly built relations now",
+        "    dbt-debt scan --print                      full plain-text breakdown, file paths",
+        "    dbt-debt scan --format json -o debt.json   machine-readable report for CI",
+        "    dbt-debt scan --warehouse snowflake --connection prod",
+        "        (scan Snowflake using the connection named 'prod' in",
+        "         ~/.snowflake/connections.toml; omit --connection for the default)",
+        "",
+        "  Full walkthroughs, permissions, and caveats: USAGE.md in the repo.",
+        "",
+        "  Keys: 1-5 or Tab to switch tabs, arrows/j/k to scroll, q to quit.",
+    ]
+
+
 def _tab_bar(views: list[tuple[str, list[str]]], active: int) -> str:
     cells = []
     for i, (label, _) in enumerate(views):
@@ -161,12 +276,12 @@ def render_frame(
     window = lines[offset : offset + body_h]
 
     out = [_CLEAR, _tab_bar(views, active), _DIM + "─" * width + _RESET]
-    out += [line[:width] for line in window]
+    out += [colorize_line(line[:width]) for line in window]
     out += [""] * (body_h - len(window))  # pad short pages so the footer stays put
     out.append(_DIM + "─" * width + _RESET)
     end = min(offset + body_h, total)
     pos = f"{label}: rows {offset + 1}-{end} of {total}" if total else f"{label}: empty"
-    keys = "1-4/Tab switch · ↑↓/jk scroll · PgUp/PgDn · g/G · q quit"
+    keys = f"1-{len(views)}/Tab switch · ↑↓/jk scroll · PgUp/PgDn · g/G · q quit"
     out.append(_DIM + f"{pos}   {keys}"[:width] + _RESET)
     return "\n".join(out)
 
@@ -294,10 +409,14 @@ def _loop(
 ) -> None:
     active, written_to = 0, None
     export_error: str | None = None
-    offsets = [0] * (len(base_views) + 1)  # one per base view plus the Export tab
+    offsets = [0] * (len(base_views) + 2)  # one per base view plus the Export and Help tabs
     export_idx = len(base_views)
+    help_view = ("Help", help_pane())
     while True:
-        views = base_views + [("Export", export_pane(json_text, written_to, export_error))]
+        views = base_views + [
+            ("Export", export_pane(json_text, written_to, export_error)),
+            help_view,
+        ]
         size = shutil.get_terminal_size()
         sys.stdout.write(render_frame(views, active, offsets[active], size.columns, size.lines))
         sys.stdout.flush()
@@ -307,7 +426,7 @@ def _loop(
 
         if key == "quit":
             break
-        elif key in ("1", "2", "3", "4"):
+        elif key in ("1", "2", "3", "4", "5"):
             active = min(int(key) - 1, len(views) - 1)
         elif key == "tab":
             active = (active + 1) % len(views)

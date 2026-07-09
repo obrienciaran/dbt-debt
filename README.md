@@ -33,8 +33,8 @@ Orphans:
   ! 2 sources found but not declared in the manifest
 Coverage:
   - tests: 121 of 230 models have at least one test (53%)
-  - docs: 88 of 230 models have a description (38%)
-  - docs: 1930 of 4385 columns have a description (44%, catalog columns)
+  - model docs: 88 of 230 models have a description (38%)
+  - column docs: 1930 of 4385 columns have a description (44%, catalog columns)
 
 Potential savings:
   - 3 columns removable
@@ -147,15 +147,14 @@ dbt-debt scan --columns           # checks models and columns
 every column), asks the warehouse what's been used, and tells you what isn't.
 
 In the terminal, `dbt-debt scan` opens a simple tabbed UI (Summary / Detail / JSON /
-Export). When you pipe the output, run it in CI, or send it to a script, there is no UI and the report just prints:
+Export / Help — the Help tab lists the scan flags and example commands). When you pipe the output, run it in CI, or send it to a script, there is no UI and the report just prints:
 
 | What you run | What you get |
 |---|---|
 | `dbt-debt scan` piped or in CI | a plain summary |
-| `dbt-debt scan --detail` | the full list of unused tables, columns, and orphans |
+| `dbt-debt scan --print` | the full plain-text report: every unused table, column, and orphan |
 | `dbt-debt scan --format json` | JSON (pipe it to `jq`) |
 | `dbt-debt scan --format json -o debt.json` | JSON written to a file |
-| `dbt-debt scan --no-interactive` | plain text, even in a terminal |
 | `dbt-debt scan --orphans` | just the orphan and undeclared-source report |
 | `dbt-debt scan --min-age-days 30` | anything first seen in the last 30 days is "too new to judge", not unused (default: 7; `0` turns the guard off) |
 | `dbt-debt scan --rare-threshold 10` | models with at most 10 queries in the window are "rarely used" (default: 5; `0` turns the band off) |

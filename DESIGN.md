@@ -124,8 +124,16 @@ never imports — or installs — anything Snowflake-related, and vice versa. Th
 is the `[snowflake]` optional extra.
 
 The Snowflake adapter was written from Snowflake's published documentation **without a live
-account**: the SQL shapes are pinned by tests but not yet confirmed against a real warehouse.
-Design decisions, and the inferences to check on first contact with a real account:
+account**; the SQL shapes are pinned by tests. **First live validation 2026-07-09** against a
+trial Enterprise account (`demo_snowflake/`, same medallion project as `demo_bq/`) confirmed the
+core loop: the ACCESS_HISTORY flatten + QUERY_HISTORY join returned exact per-relation counts
+(worksheet queries matched 4/1/1/1), the dbt query-comment exclusion held (builds did not count
+as use), orphan discovery found the hand-planted table through the case normalization, and the
+scan exited 0 end to end. Observed ACCESS_HISTORY lag was ~20 minutes, well inside the
+documented worst case. Two observations from that run: the first-seen/too-new guard could not
+be judged (see the first-seen bullet), and no reclaimable-bytes figures appeared — whether
+dbt-snowflake's `catalog.json` stats use a different key than we read is an open check.
+Design decisions, and the inferences still to confirm:
 
 - **Usage comes from `ACCOUNT_USAGE.ACCESS_HISTORY`** (`direct_objects_accessed`, flattened, one
   row per relation a query touched — the analogue of BigQuery's `referenced_tables`), joined to
@@ -138,10 +146,15 @@ Design decisions, and the inferences to check on first contact with a real accou
   `MIN(created)` over all rows for a name, counting rows whose `deleted` is set, so dbt's
   `CREATE OR REPLACE` rebuilds don't reset the age. Same reasoning as BigQuery's JOBS-not-TABLES
   choice. *Unverified inference:* that dropped incarnations are retained long enough to matter.
+  *Still open after the 2026-07-09 run:* `ACCOUNT_USAGE.TABLES` lags further behind than
+  ACCESS_HISTORY, so 20-minute-old tables had no first-seen row yet and a brand-new dead model
+  showed as unused rather than too-new at the default `--min-age-days` — re-check with
+  `--no-cache` once the view catches up, and decide whether a missing first-seen should be
+  treated as too-new rather than judgeable.
 - **The dbt exclusion assumes dbt's query-comment lands in `query_text`** (it does on BigQuery);
   the pattern sits in a `$$...$$` dollar-quoted string (Snowflake's no-escape literal) inside
   `REGEXP_COUNT(...) = 0`, because Snowflake's `REGEXP_LIKE` anchors to the whole string.
-  *Unverified inference:* comment placement in ACCOUNT_USAGE's recorded text.
+  *Confirmed live 2026-07-09:* dbt's builds were correctly excluded from usage counts.
 - **Orphans** read one `<database>.INFORMATION_SCHEMA.TABLES` filtered by lowercased schema name
   (one query, not BigQuery's per-dataset union — Snowflake's information schema spans the
   database). Snowflake's uppercase identifiers normalize away because every relation key is

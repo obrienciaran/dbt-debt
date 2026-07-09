@@ -1,8 +1,8 @@
-"""The warehouse seam: a Protocol so the engine never imports a BigQuery client directly.
+"""The warehouse seam: a Protocol so the engine never imports a warehouse SDK directly.
 
-Methods return already-parsed domain values (not raw rows) so a `FakeBigQueryClient` can supply
-canned data in tests with no network and no credentials. The real implementation lives in
-`bigquery`; nothing else in the package imports `google-cloud-bigquery`.
+Methods return already-parsed domain values (not raw rows) so a `FakeWarehouseClient` can supply
+canned data in tests with no network and no credentials. Each real implementation lives in its
+own module (`bigquery`, `snowflake`); nothing else in the package imports a warehouse SDK.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ class WarehouseError(RuntimeError):
 
 
 class MissingCredentialsError(WarehouseError):
-    """Raised when no Google credentials can be found at all.
+    """Raised when no warehouse credentials can be found at all.
 
     Distinct from `MissingPermissionError`: here the caller is not signed in, rather than signed
     in without the required grant. The CLI turns both into a friendly message and a clean exit.
@@ -32,20 +32,21 @@ class MissingCredentialsError(WarehouseError):
 
 
 class MissingPermissionError(WarehouseError):
-    """Raised when the caller cannot see every user's jobs.
+    """Raised when the caller cannot see every user's query history.
 
-    Without `bigquery.jobs.listAll` a caller silently sees only their own jobs, so every
-    "unused" verdict would be false-confident. The client preflights this and fails loudly
-    rather than reporting a valid-looking but partial result.
+    Without account-wide history (`bigquery.jobs.listAll`; Snowflake's ACCOUNT_USAGE share) a
+    caller silently sees only their own queries, so every "unused" verdict would be
+    false-confident. Each client preflights this and fails loudly rather than reporting a
+    valid-looking but partial result.
     """
 
 
 @runtime_checkable
-class BigQueryClient(Protocol):
+class WarehouseClient(Protocol):
     """What the engine needs from the warehouse, narrowed to parsed results."""
 
     def assert_usage_permission(self) -> None:
-        """Verify the caller can read all users' jobs; raise `MissingPermissionError` if not."""
+        """Verify the caller can read all users' queries; raise `MissingPermissionError` if not."""
         ...
 
     def table_usage(self) -> list[UsageRow]:
@@ -63,8 +64,8 @@ class BigQueryClient(Protocol):
     def existing_relations(self, datasets: Set[str]) -> list[WarehouseRelation]:
         """Tables and views physically present in `datasets`, for orphan discovery.
 
-        Raises `MissingPermissionError` when the warehouse metadata cannot be listed (the caller
-        needs `bigquery.tables.list`, e.g. `roles/bigquery.metadataViewer`); returns an empty list
-        when `datasets` is empty.
+        Raises `MissingPermissionError` when the warehouse metadata cannot be listed (on
+        BigQuery the caller needs `bigquery.tables.list`, e.g. `roles/bigquery.metadataViewer`);
+        returns an empty list when `datasets` is empty.
         """
         ...

@@ -1,4 +1,4 @@
-"""A `BigQueryClient` test double returning canned data, no network or credentials."""
+"""A `WarehouseClient` test double returning canned data, no network or credentials."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from dbt_debt.consumption.client import MissingPermissionError
 from dbt_debt.domain import UsageRow, WarehouseRelation
 
 
-class FakeBigQueryClient:
-    """Canned implementation of the `BigQueryClient` Protocol for deterministic tests.
+class FakeWarehouseClient:
+    """Canned implementation of the `WarehouseClient` Protocol for deterministic tests.
 
     `calls` counts invocations per method so cache tests can assert the inner client was hit
     exactly once (a hit serves the second call from disk without touching it).

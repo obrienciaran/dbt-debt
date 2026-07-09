@@ -1,8 +1,8 @@
 # Design
 
 This is the "how it's built" doc for `dbt-debt`. For how to use it, see [`README.md`](README.md).
-What it covers: BigQuery only, a standalone Python command-line tool, working at both the model and
-the column level.
+What it covers: BigQuery (validated live) and Snowflake (built account-blind, see below), a
+standalone Python command-line tool, working at both the model and the column level.
 
 A couple of words used throughout: a **model** is one of your `.sql` files; a **relation** is the
 actual table or view that model builds in the warehouse.
@@ -30,11 +30,16 @@ dbt_debt/
     graph.py             #   the map of which buildable node depends on which: descendants() / ancestors()
     errors.py            #   ArtifactError: a broken artifact fails with the path, not a traceback
 
-  consumption/           # ask BigQuery what was actually used
-    client.py            # the shared interface the rest of the code talks to (so it can be faked in tests)
-    bigquery.py          # the real BigQuery version (the only file that needs the BigQuery library)
+  consumption/           # ask the warehouse what was actually used
+    client.py            # WarehouseClient, the shared interface the rest of the code talks to
+                         #   (so it can be faked in tests); one implementation per warehouse
+    bigquery.py          # the BigQuery version (the only file that imports the BigQuery library)
+    snowflake.py         # the Snowflake version (the only file that imports the connector;
+                         #   an optional extra, built account-blind — see the Snowflake section)
     cache.py             # an optional saved-results layer that wraps any client (same interface)
-    jobs.py              # the queries against BigQuery's query log, table list, and first-seen dates
+    jobs.py              # the BigQuery queries (query log, table list, first-seen) + the
+                         #   warehouse-neutral row parsers both clients feed
+    snowflake_queries.py # the Snowflake ACCOUNT_USAGE / INFORMATION_SCHEMA queries
     exclusion.py         # the filter that throws out dbt's own queries
     usage.py             # turn "these tables were used" into "these models were used"
     columns.py           # turn query text into the (model, column) pairs that were actually read
@@ -49,6 +54,9 @@ dbt_debt/
     columns.py           # a column is unused if it's not read and feeds nothing that's read
     orphans.py           # an orphan is a table in a dbt dataset with no dbt model behind it
     freshness.py         # the too-new guard: first seen recently means "too new to judge", not unused
+    rarity.py            # the rarely-used band: queried, but at most --rare-threshold times
+    coverage.py          # test/docs coverage counts (models tested, models/columns documented)
+    partitioning.py      # large BigQuery tables declaring neither partition_by nor cluster_by
     semantic.py          # which semantic models / metrics / saved queries a dead model feeds
     tests.py / exposures.py / blockers.py   # checks that only need dbt's own files
 
@@ -103,6 +111,61 @@ mean "unused by me".
 dbt's own queries are left out by spotting the marker dbt stamps on every query it runs
 (`"app": "dbt"`). This matters because dbt's data tests are themselves `SELECT`s, and without this
 they'd look like real usage.
+
+## Snowflake, built account-blind
+
+The warehouse sits behind one Protocol (`consumption/client.py`'s `WarehouseClient`), whose
+methods return parsed domain values — `UsageRow`s, `WarehouseRelation`s, first-seen dates, query
+texts. Everything inward of those values (verdict, report, cache, artifacts) is warehouse-free,
+so a new warehouse is exactly: one pure query-builder module, one SDK-touching client module, and
+a sqlglot dialect threaded through the SQL parsing. The warehouse is picked from the manifest's
+`adapter_type` (`--warehouse` overrides); each client imports its SDK lazily, so a BigQuery user
+never imports — or installs — anything Snowflake-related, and vice versa. The Snowflake connector
+is the `[snowflake]` optional extra.
+
+The Snowflake adapter was written from Snowflake's published documentation **without a live
+account**: the SQL shapes are pinned by tests but not yet confirmed against a real warehouse.
+Design decisions, and the inferences to check on first contact with a real account:
+
+- **Usage comes from `ACCOUNT_USAGE.ACCESS_HISTORY`** (`direct_objects_accessed`, flattened, one
+  row per relation a query touched — the analogue of BigQuery's `referenced_tables`), joined to
+  `QUERY_HISTORY` for the SELECT/success/window/dbt-exclusion filters. We deliberately do *not*
+  fall back to sqlglot-parsing `query_text` for usage: a silently unparseable query would erase
+  evidence of use and produce false "unused" verdicts — the one failure mode this tool must never
+  have. ACCESS_HISTORY needs Enterprise edition and IMPORTED PRIVILEGES on the `SNOWFLAKE`
+  database; on Standard the preflight stops the scan, mirroring the `jobs.listAll` stance.
+- **First-seen comes from `ACCOUNT_USAGE.TABLES` including dropped incarnations** —
+  `MIN(created)` over all rows for a name, counting rows whose `deleted` is set, so dbt's
+  `CREATE OR REPLACE` rebuilds don't reset the age. Same reasoning as BigQuery's JOBS-not-TABLES
+  choice. *Unverified inference:* that dropped incarnations are retained long enough to matter.
+- **The dbt exclusion assumes dbt's query-comment lands in `query_text`** (it does on BigQuery);
+  the pattern sits in a `$$...$$` dollar-quoted string (Snowflake's no-escape literal) inside
+  `REGEXP_COUNT(...) = 0`, because Snowflake's `REGEXP_LIKE` anchors to the whole string.
+  *Unverified inference:* comment placement in ACCOUNT_USAGE's recorded text.
+- **Orphans** read one `<database>.INFORMATION_SCHEMA.TABLES` filtered by lowercased schema name
+  (one query, not BigQuery's per-dataset union — Snowflake's information schema spans the
+  database). Snowflake's uppercase identifiers normalize away because every relation key is
+  lowercased on both sides.
+- ACCOUNT_USAGE lags reality by up to ~45 minutes (documented); harmless for a debt scan.
+- **DuckDB was considered and rejected**: it keeps no query history at all, so the core "unused"
+  verdict has no signal to stand on, and its enterprise footprint among dbt users is small.
+
+## The rarely-used band, coverage, and the partitioning check
+
+Between active and unused sits a third verdict (`verdict/rarity.py`): a model queried at most
+`--rare-threshold` times (default 5) in the window is **rarely used** — reported with its query
+count, last-queried date, and size so an owner can judge it, but never folded into any
+unused-derived figure, because observed use is use. The too-new guard applies to the band the
+same way it applies to the dead set (a model created mid-window hasn't had a full window to
+accumulate queries). The usage counts were always fetched; this band just stops discarding them.
+
+Two artifact-only hygiene stats ride along: `verdict/coverage.py` counts models with at least one
+test and models/columns with descriptions (column denominator prefers the catalog's physical
+columns, and the sentence says which universe was used); `verdict/partitioning.py` flags the
+largest `table`/`incremental` models (≥ 1 GiB, at most 20) declaring neither `partition_by` nor
+`cluster_by` — BigQuery only, since Snowflake micro-partitions automatically and its explicit
+clustering keys are optional large-table tuning, not debt. Ranked by *stored* bytes; scan cost is
+not collected (see the backlog).
 
 ## Working out where columns come from
 

@@ -1,8 +1,10 @@
 """Command-line entry point: argument parsing plus thin orchestration.
 
-`scan` loads dbt's on-disk artifacts, connects to BigQuery, and prints the model-level
-scorecard. The warehouse work goes through the `BigQueryClient` Protocol; `_scan` takes the
-client as an argument so the orchestration is testable with a fake and no credentials.
+`scan` loads dbt's on-disk artifacts, connects to the warehouse, and prints the model-level
+scorecard. The warehouse work goes through the `WarehouseClient` Protocol; `_scan` takes the
+client as an argument so the orchestration is testable with a fake and no credentials. The
+warehouse itself is auto-detected from the manifest's `adapter_type` (overridable with
+`--warehouse`), and each adapter's SDK is imported only when that warehouse is scanned.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -17,10 +20,10 @@ from dbt_debt.artifacts.catalog import Catalog, load_catalog
 from dbt_debt.artifacts.errors import ArtifactError
 from dbt_debt.artifacts.graph import Graph
 from dbt_debt.artifacts.manifest import load_manifest
-from dbt_debt.config import DEFAULT_QUERY_COMMENT_PATTERN, Config
+from dbt_debt.config import DEFAULT_QUERY_COMMENT_PATTERN, SUPPORTED_WAREHOUSES, Config
 from dbt_debt.consumption.client import (
-    BigQueryClient,
     MissingPermissionError,
+    WarehouseClient,
     WarehouseError,
 )
 from dbt_debt.consumption.columns import consumed_model_columns
@@ -41,11 +44,11 @@ from dbt_debt.report.spinner import status
 from dbt_debt.sqlparse import build_schema
 
 
-def _scan(config: Config, client: BigQueryClient, manifest: Manifest | None = None) -> Scorecard:
+def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = None) -> Scorecard:
     """Orchestrate a scan: preflight, load artifacts, fetch usage, assemble the scorecard.
 
-    `manifest` may be passed in when the caller has already loaded it (to resolve the BigQuery
-    project); otherwise it is loaded here. Tests inject a fake client and let it load.
+    `manifest` may be passed in when the caller has already loaded it (to resolve the warehouse
+    database); otherwise it is loaded here. Tests inject a fake client and let it load.
     """
 
     client.assert_usage_permission()
@@ -58,7 +61,7 @@ def _scan(config: Config, client: BigQueryClient, manifest: Manifest | None = No
     storage = _storage_bytes(catalog)
     with status("Analysing column usage"):
         column_report = _column_report(config, client, manifest, catalog, storage)
-    references = model_relation_references(manifest)
+    references = model_relation_references(manifest, dialect=config.dialect)
     with status("Listing warehouse relations"):
         existing = _existing_relations(client, manifest)
     orphan_report = build_orphan_report(manifest, existing, references)
@@ -66,8 +69,19 @@ def _scan(config: Config, client: BigQueryClient, manifest: Manifest | None = No
     if config.min_age_days > 0:
         with status("Checking relation ages"):
             first_seen = client.relation_first_seen()
+    catalog_columns = (
+        {uid: node.columns for uid, node in catalog.nodes.items()} if catalog else None
+    )
     return build_scorecard(
-        manifest, graph, usage, storage, config, column_report, orphan_report, first_seen
+        manifest,
+        graph,
+        usage,
+        storage,
+        config,
+        column_report,
+        orphan_report,
+        first_seen,
+        catalog_columns=catalog_columns,
     )
 
 
@@ -101,21 +115,60 @@ def _storage_bytes(catalog: Catalog | None) -> dict[str, int]:
     return {node.relation_key: node.num_bytes for node in catalog.nodes.values()}
 
 
-def _infer_project(manifest: Manifest) -> str | None:
-    """The GCP project the models live in, taken as the most common model `database`.
+def _infer_database(manifest: Manifest) -> str | None:
+    """The warehouse database the models live in, taken as the most common model `database`.
 
-    `INFORMATION_SCHEMA.JOBS` is project-scoped, so the scan must run in the project where the
-    relations (and their queries) live — which is exactly each model's BigQuery `database`. This
-    lets the tool target the right project without a flag, the way dbt itself does.
+    On BigQuery this is the GCP project — `INFORMATION_SCHEMA.JOBS` is project-scoped, so the
+    scan must run where the relations (and their queries) live. On Snowflake it names the
+    database whose `INFORMATION_SCHEMA.TABLES` the orphan scan reads. Either way this lets the
+    tool target the right database without a flag, the way dbt itself does.
     """
 
     databases = Counter(m.database for m in manifest.models.values() if m.database)
     return databases.most_common(1)[0][0] if databases else None
 
 
+def _resolve_warehouse(flag: str | None, manifest: Manifest) -> str:
+    """Pick the warehouse: an explicit `--warehouse` wins, else the manifest's `adapter_type`.
+
+    A manifest without an `adapter_type` falls back to BigQuery (older artifacts predate the
+    field, and the tool was BigQuery-only). A recognised-but-unsupported adapter raises
+    `ValueError` so the CLI can exit 2 with the supported list rather than misreading another
+    warehouse's identifiers.
+    """
+
+    if flag:
+        return flag
+    adapter = manifest.adapter_type
+    if adapter is None:
+        return "bigquery"
+    if adapter in SUPPORTED_WAREHOUSES:
+        return adapter
+    raise ValueError(
+        f"the manifest was built by the {adapter!r} adapter, which dbt-debt does not support "
+        f"yet (supported: {', '.join(SUPPORTED_WAREHOUSES)}). Pass --warehouse to override."
+    )
+
+
+def _make_client(config: Config, database: str | None) -> WarehouseClient:
+    """Build the live client for the resolved warehouse.
+
+    Each adapter module lazily imports its own SDK, so scanning one warehouse never imports —
+    or requires installing — the other's client library.
+    """
+
+    if config.warehouse == "snowflake":
+        from dbt_debt.consumption.snowflake import RealSnowflakeClient
+
+        return RealSnowflakeClient(config, database=database)
+    from dbt_debt.consumption.bigquery import RealBigQueryClient
+
+    return RealBigQueryClient(config, project=database)
+
+
 def _column_report(
     config: Config,
-    client: BigQueryClient,
+    client: WarehouseClient,
     manifest: Manifest,
     catalog: Catalog | None,
     storage: dict[str, int],
@@ -137,13 +190,15 @@ def _column_report(
         return None
 
     schema = build_schema(catalog.relation_columns())
-    consumed = consumed_model_columns(client.query_texts(), schema, manifest.relation_to_id())
-    edges = SqlglotLineage(manifest, catalog, schema=schema).edges()
+    consumed = consumed_model_columns(
+        client.query_texts(), schema, manifest.relation_to_id(), dialect=config.dialect
+    )
+    edges = SqlglotLineage(manifest, catalog, dialect=config.dialect, schema=schema).edges()
     return build_column_report(manifest, catalog, consumed, edges, storage)
 
 
 def _existing_relations(
-    client: BigQueryClient, manifest: Manifest
+    client: WarehouseClient, manifest: Manifest
 ) -> list[WarehouseRelation] | None:
     """List warehouse relations in dbt-managed datasets, or None when they can't be read.
 
@@ -213,11 +268,14 @@ def _config_from_args(args: argparse.Namespace) -> Config:
         project_dir=Path(args.project_dir),
         target_path=Path(args.target_path),
         project=args.project,
-        region=args.region,
+        region=args.region or "US",
+        warehouse=args.warehouse or "bigquery",
+        connection=args.connection,
         lookback_days=args.lookback_days,
         query_comment_pattern=args.query_comment_pattern,
         columns=args.columns,
         min_age_days=args.min_age_days,
+        rare_threshold=args.rare_threshold,
         output_format=args.format,
         top_n=args.top_n,
         cache=args.cache,
@@ -245,8 +303,6 @@ def _run_scan(args: argparse.Namespace) -> int:
         )
         return 2
 
-    from dbt_debt.consumption.bigquery import RealBigQueryClient
-
     try:
         manifest = load_manifest(config.manifest_path)
     except ArtifactError as exc:
@@ -259,10 +315,18 @@ def _run_scan(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    project = config.project or _infer_project(manifest)
     try:
-        client: BigQueryClient = RealBigQueryClient(config, project=project)
-        client = _wrap_cache(client, config, project)
+        config = replace(config, warehouse=_resolve_warehouse(args.warehouse, manifest))
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.region and config.warehouse != "bigquery":
+        print(
+            f"--region only applies to BigQuery; ignoring for {config.warehouse}.", file=sys.stderr
+        )
+    database = config.project or _infer_database(manifest)
+    try:
+        client = _wrap_cache(_make_client(config, database), config, database)
         scorecard = _scan(config, client, manifest)
     except WarehouseError as exc:
         print(str(exc), file=sys.stderr)
@@ -300,7 +364,7 @@ def _clear_all_cache() -> None:
     print("cleared the dbt-debt cache.", file=sys.stderr)
 
 
-def _wrap_cache(client: BigQueryClient, config: Config, project: str | None) -> BigQueryClient:
+def _wrap_cache(client: WarehouseClient, config: Config, project: str | None) -> WarehouseClient:
     """Wrap the client in the TTL disk cache unless `--no-cache` was passed.
 
     The key parts are exactly the warehouse query parameters; the manifest is intentionally not
@@ -311,15 +375,17 @@ def _wrap_cache(client: BigQueryClient, config: Config, project: str | None) -> 
         return client
     from datetime import timedelta
 
-    from dbt_debt.consumption.cache import CachingBigQueryClient, cache_dir_for
+    from dbt_debt.consumption.cache import CachingWarehouseClient, cache_dir_for
 
     key_parts = {
+        "warehouse": config.warehouse,
+        "connection": config.connection or "",
         "project": project or "",
         "region": config.region,
         "lookback_days": str(config.lookback_days),
         "query_comment_pattern": config.query_comment_pattern,
     }
-    return CachingBigQueryClient(
+    return CachingWarehouseClient(
         client,
         cache_dir=cache_dir_for(config.project_dir),
         ttl=timedelta(hours=config.cache_ttl_hours),
@@ -347,7 +413,7 @@ def _should_view(config: Config, args: argparse.Namespace) -> bool:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dbt-debt",
-        description="A technical-debt scorecard for dbt projects on BigQuery.",
+        description="A technical-debt scorecard for dbt projects on BigQuery and Snowflake.",
     )
     # A distinct dest from scan's own --clear-cache: argparse lets a subparser's defaults
     # overwrite values the top-level parser already set, so sharing one dest would make
@@ -367,11 +433,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--target-path", default="target", help="Where manifest.json/catalog.json live."
     )
     scan.add_argument(
+        "--warehouse",
+        choices=list(SUPPORTED_WAREHOUSES),
+        default=None,
+        help="Warehouse to scan (default: the manifest's adapter_type).",
+    )
+    scan.add_argument(
         "--project",
         default=None,
-        help="GCP project to query (default: inferred from the models' database).",
+        help="Warehouse database to query — the GCP project on BigQuery, the database on "
+        "Snowflake (default: inferred from the models' database).",
     )
-    scan.add_argument("--region", default="US", help="BigQuery region for INFORMATION_SCHEMA.")
+    scan.add_argument(
+        "--region", default=None, help="BigQuery region for INFORMATION_SCHEMA (default: US)."
+    )
+    scan.add_argument(
+        "--connection",
+        default=None,
+        help="Named Snowflake connection from connections.toml (default: the connector's "
+        "default connection).",
+    )
     scan.add_argument(
         "--lookback-days", type=int, default=180, help="Usage window (JOBS retention is ~180)."
     )
@@ -391,6 +472,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=7,
         help="Relations first seen fewer than this many days ago are reported as too new to "
         "judge rather than unused (default: 7; 0 disables the guard).",
+    )
+    scan.add_argument(
+        "--rare-threshold",
+        type=int,
+        default=5,
+        help="Queried models with at most this many queries in the window are reported as "
+        "rarely used (default: 5; 0 disables the band).",
     )
     scan.add_argument("--format", choices=["text", "json"], default="text")
     scan.add_argument(
@@ -424,7 +512,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-cache",
         dest="cache",
         action="store_false",
-        help="Always query BigQuery live, ignoring (and not writing) the scan cache.",
+        help="Always query the warehouse live, ignoring (and not writing) the scan cache.",
     )
     scan.add_argument(
         "--cache-ttl",

@@ -1,8 +1,10 @@
-"""Pure `INFORMATION_SCHEMA` SQL builders and row parsers.
+"""Pure BigQuery `INFORMATION_SCHEMA` SQL builders and warehouse-neutral row parsers.
 
 Kept free of any BigQuery client so the query shape and parsing are unit-testable with plain
 dicts. The real client (`bigquery`) builds the SQL here, runs it, and feeds the rows back to
-these parsers. Rows are read by key, so both `google.cloud.bigquery.Row` and dicts work.
+these parsers. Rows are read by key, so both `google.cloud.bigquery.Row` and dicts work — which
+also makes the parsers warehouse-neutral: the Snowflake client feeds them rows from the queries
+in `snowflake_queries`, whose result columns carry the same names.
 """
 
 from __future__ import annotations

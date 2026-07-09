@@ -25,6 +25,57 @@ def test_loads_models_tests_exposures() -> None:
     assert len(manifest.exposures) == 1
 
 
+def test_descriptions_and_partitioning_config_are_parsed() -> None:
+    data = {
+        "metadata": {
+            "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+            "project_name": "p",
+        },
+        "nodes": {
+            "model.p.m": {
+                "resource_type": "model",
+                "name": "m",
+                "description": "A documented model.",
+                "columns": {
+                    "ID": {"name": "ID", "description": "The key."},
+                    "amount": {"name": "amount", "description": "   "},
+                    "note": {"name": "note"},
+                },
+                "config": {
+                    "materialized": "incremental",
+                    "partition_by": {"field": "day", "data_type": "date"},
+                    "cluster_by": None,
+                },
+            },
+            "model.p.bare": {"resource_type": "model", "name": "bare", "description": ""},
+        },
+    }
+    manifest = parse_manifest(data)
+    m = manifest.models["model.p.m"]
+    # Whitespace-only descriptions do not count, and documented names are lowercased like
+    # the column list itself.
+    assert m.has_description is True
+    assert m.documented_columns == ("id",)
+    assert (m.materialized, m.partitioned, m.clustered) == ("incremental", True, False)
+    bare = manifest.models["model.p.bare"]
+    assert bare.has_description is False
+    assert (bare.materialized, bare.partitioned, bare.clustered) == (None, False, False)
+
+
+def test_adapter_type_is_parsed_and_lowercased() -> None:
+    data = {
+        "metadata": {
+            "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+            "project_name": "p",
+            "adapter_type": "Snowflake",
+        },
+        "nodes": {},
+    }
+    assert parse_manifest(data).adapter_type == "snowflake"
+    del data["metadata"]["adapter_type"]  # type: ignore[attr-defined]
+    assert parse_manifest(data).adapter_type is None
+
+
 def test_model_depends_on_columns_and_contract() -> None:
     manifest = load_manifest(FIXTURE)
     fct = manifest.models["model.jaffle_shop.fct_orders"]

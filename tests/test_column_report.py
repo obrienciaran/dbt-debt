@@ -13,7 +13,7 @@ from dbt_debt.consumption.columns import consumed_model_columns
 from dbt_debt.lineage.sqlglot_source import SqlglotLineage
 from dbt_debt.report.scorecard import build_column_report
 from dbt_debt.sqlparse import build_schema
-from tests.fakes import FakeBigQueryClient
+from tests.fakes import FakeWarehouseClient
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -53,7 +53,7 @@ def test_build_column_report_counts_and_blockers() -> None:
 
 
 def test_scan_with_lineage_populates_column_section() -> None:
-    client = FakeBigQueryClient(query_texts=[CONSUMER_QUERY])
+    client = FakeWarehouseClient(query_texts=[CONSUMER_QUERY])
     card = _scan(_config(), client)
     assert card.columns is not None
     assert (card.columns.active, card.columns.unused) == (2, 3)
@@ -61,7 +61,7 @@ def test_scan_with_lineage_populates_column_section() -> None:
 
 def test_scan_without_lineage_has_no_column_section() -> None:
     config = Config(project_dir=FIXTURES.parent.parent, target_path=Path("tests/fixtures"))
-    card = _scan(config, FakeBigQueryClient())
+    card = _scan(config, FakeWarehouseClient())
     assert card.columns is None
 
 

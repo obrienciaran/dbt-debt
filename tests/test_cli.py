@@ -44,6 +44,12 @@ def test_top_n_reaches_the_config() -> None:
     assert _config_from_args(args).top_n == 3
 
 
+def test_rare_threshold_reaches_the_config() -> None:
+    args = _build_parser().parse_args(["scan", "--rare-threshold", "3"])
+    assert _config_from_args(args).rare_threshold == 3
+    assert _config_from_args(_build_parser().parse_args(["scan"])).rare_threshold == 5
+
+
 def test_min_age_days_reaches_the_config() -> None:
     args = _build_parser().parse_args(["scan", "--min-age-days", "14"])
     assert _config_from_args(args).min_age_days == 14
@@ -53,10 +59,10 @@ def test_min_age_days_reaches_the_config() -> None:
 def test_min_age_zero_skips_the_first_seen_call() -> None:
     from dbt_debt.cli import _scan
     from dbt_debt.config import Config
-    from tests.fakes import FakeBigQueryClient
+    from tests.fakes import FakeWarehouseClient
 
     fixture_dir = Path(__file__).parent / "fixtures"
-    client = FakeBigQueryClient()
+    client = FakeWarehouseClient()
     config = Config(
         project_dir=fixture_dir.parent, target_path=Path(fixture_dir.name), min_age_days=0
     )
@@ -162,3 +168,72 @@ def test_emit_reports_unwritable_output_path(
     # Writing to a directory fails with OSError; the CLI must turn that into exit 2.
     assert _emit("report", str(tmp_path)) == 2
     assert "cannot write report" in capsys.readouterr().err
+
+
+def _manifest_for(adapter_type: str | None) -> Any:
+    from dbt_debt.domain import Manifest
+
+    return Manifest(
+        project_name="p", dbt_schema_version="", dbt_version=None, adapter_type=adapter_type
+    )
+
+
+def test_warehouse_flag_overrides_the_manifest_adapter() -> None:
+    from dbt_debt.cli import _resolve_warehouse
+
+    assert _resolve_warehouse("snowflake", _manifest_for("bigquery")) == "snowflake"
+
+
+def test_warehouse_auto_detects_from_the_manifest_adapter() -> None:
+    from dbt_debt.cli import _resolve_warehouse
+
+    assert _resolve_warehouse(None, _manifest_for("snowflake")) == "snowflake"
+
+
+def test_missing_adapter_type_falls_back_to_bigquery() -> None:
+    # Older artifacts predate adapter_type, and the tool was BigQuery-only.
+    from dbt_debt.cli import _resolve_warehouse
+
+    assert _resolve_warehouse(None, _manifest_for(None)) == "bigquery"
+
+
+def test_unsupported_adapter_exits_two(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    manifest = {
+        "metadata": {**_METADATA, "adapter_type": "redshift"},
+        "nodes": {"model.p.m": {"resource_type": "model", "name": "m", "schema": "s"}},
+    }
+    (target / "manifest.json").write_text(json.dumps(manifest))
+    assert main(["scan", "--project-dir", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert "redshift" in err
+    assert "--warehouse" in err
+
+
+def test_snowflake_scan_without_the_connector_exits_three(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The optional extra is absent from the dev environment, so a Snowflake scan must stop at
+    # exit 3 with the install hint — proof the SDK is only reached for the selected warehouse.
+    manifest = {
+        "metadata": {**_METADATA, "adapter_type": "snowflake"},
+        "nodes": {"model.p.m": {"resource_type": "model", "name": "m", "schema": "s"}},
+    }
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "manifest.json").write_text(json.dumps(manifest))
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache"]) == 3
+    assert "dbt-debt[snowflake]" in capsys.readouterr().err
+
+
+def test_cache_key_carries_the_warehouse(tmp_path: Path) -> None:
+    # Two warehouses' results must never collide in the cache, whatever else matches.
+    from dbt_debt.cli import _wrap_cache
+    from dbt_debt.config import Config
+    from tests.fakes import FakeWarehouseClient
+
+    config = Config(project_dir=tmp_path, warehouse="snowflake", connection="team")
+    wrapped: Any = _wrap_cache(FakeWarehouseClient(), config, "db")
+    assert wrapped._key_parts["warehouse"] == "snowflake"
+    assert wrapped._key_parts["connection"] == "team"

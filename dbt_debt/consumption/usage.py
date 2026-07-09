@@ -24,6 +24,21 @@ def queried_model_ids(manifest: Manifest, usage_rows: Iterable[UsageRow]) -> set
     }
 
 
+def model_usage(manifest: Manifest, usage_rows: Iterable[UsageRow]) -> dict[str, UsageRow]:
+    """Rekey the usage rows by model unique_id, keeping counts and recency.
+
+    Where `queried_model_ids` collapses usage to membership, this keeps the whole row so the
+    rarity band can see *how much* each queried model was used and when last.
+    """
+
+    relation_to_id = manifest.relation_to_id()
+    return {
+        relation_to_id[row.relation_key]: row
+        for row in usage_rows
+        if row.relation_key in relation_to_id
+    }
+
+
 def first_seen_model_ids(
     manifest: Manifest, first_seen: Mapping[str, datetime]
 ) -> dict[str, datetime]:

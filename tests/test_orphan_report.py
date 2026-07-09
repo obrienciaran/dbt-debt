@@ -12,7 +12,7 @@ from dbt_debt.config import Config
 from dbt_debt.domain import WarehouseRelation
 from dbt_debt.references import model_relation_references
 from dbt_debt.report.scorecard import build_orphan_report
-from tests.fakes import FakeBigQueryClient
+from tests.fakes import FakeWarehouseClient
 
 FIXTURE = Path(__file__).parent / "fixtures" / "manifest.json"
 
@@ -60,7 +60,7 @@ def test_build_orphan_report_skipped_without_metadata() -> None:
 
 
 def test_scan_reports_orphans_via_fake_client() -> None:
-    client = FakeBigQueryClient(existing=_warehouse(WarehouseRelation(ORPHAN_KEY, "BASE TABLE")))
+    client = FakeWarehouseClient(existing=_warehouse(WarehouseRelation(ORPHAN_KEY, "BASE TABLE")))
     card = _scan(_config(), client)
     assert card.orphans is not None
     assert card.orphans.orphans_checked is True
@@ -70,7 +70,7 @@ def test_scan_reports_orphans_via_fake_client() -> None:
 def test_scan_warns_and_skips_orphans_without_permission(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    card = _scan(_config(), FakeBigQueryClient(orphans_permitted=False))
+    card = _scan(_config(), FakeWarehouseClient(orphans_permitted=False))
     assert card.orphans is not None
     assert card.orphans.orphans_checked is False
     assert "metadata" in capsys.readouterr().err

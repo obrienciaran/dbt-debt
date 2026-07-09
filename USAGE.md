@@ -5,9 +5,10 @@ together, see [`DESIGN.md`](DESIGN.md).
 
 ## ⚡ Making repeat runs fast (the cache)
 
-The slow part of a scan is talking to BigQuery, so the first scan saves its BigQuery results to a
+The slow part of a scan is talking to the warehouse, so the first scan saves its results to a
 small file in your temp folder. Run `dbt-debt scan` (or `dbt-debt scan --columns`) again soon after
-and it reads that file instead of re-querying.
+and it reads that file instead of re-querying. Results are keyed by warehouse and query
+parameters, so BigQuery and Snowflake scans never collide.
 
 Saved results count as fresh for 1 hour; after that the next scan refetches and replaces them. Change
 the window with `--cache-ttl <hours>`, or skip saved results with `--no-cache` for the latest
@@ -27,9 +28,12 @@ For a clean slate, it's easiest to run `dbt-debt --clear-cache`.
 ## 🔧 How it works
 
 1. Read `manifest.json` and `catalog.json` from `target/`. (dbt-debt never imports or runs dbt, it
-   just reads the files dbt already wrote.)
-2. Ask BigQuery which tables were queried (by people or tools) in the lookback window, ignoring dbt's own queries.
-   With `--columns`, also read those queries' text to see which columns they used.
+   just reads the files dbt already wrote.) The manifest's `adapter_type` picks the warehouse;
+   `--warehouse` overrides it.
+2. Ask the warehouse which tables were queried (by people or tools) in the lookback window,
+   ignoring dbt's own queries — BigQuery's `INFORMATION_SCHEMA.JOBS`, or Snowflake's
+   `ACCOUNT_USAGE.ACCESS_HISTORY`. With `--columns`, also read those queries' text to see which
+   columns they used.
 3. Trace where each column came from, using your models' SQL, so usage flows back up to the columns
    that fed it.
 4. Compare what got used against everything in your project, and report what's unused and safe to
@@ -106,6 +110,8 @@ end of your pipeline.
 
 ## 🔐 Permissions
 
+### BigQuery
+
 dbt-debt signs in the same way `gcloud` does (`gcloud auth application-default login`) and runs in
 the project your models live in (read from your project, or set with `--project`).
 
@@ -120,19 +126,42 @@ the project your models live in (read from your project, or set with `--project`
 That required grant is the only one. Table sizes (used to rank unused tables) come from
 `catalog.json`, which `dbt docs generate` already fills in, so they need no extra access.
 
+### Snowflake (not yet validated live)
+
+Install the optional connector (`pip install 'dbt-debt[snowflake]'`) and define a connection the
+connector can find — `~/.snowflake/connections.toml` or `SNOWFLAKE_*` environment variables; pass
+`--connection NAME` for a non-default one. The scan needs:
+
+- **Required:** IMPORTED PRIVILEGES on the `SNOWFLAKE` database (so `ACCOUNT_USAGE` is readable)
+  and Enterprise edition (`ACCESS_HISTORY` is an Enterprise view). dbt-debt checks up front and
+  stops if either is missing — usage deliberately comes from ACCESS_HISTORY's access metadata,
+  never from parsing query text, so an unparseable query can never erase evidence of use.
+- **Optional (for orphans):** USAGE on the database and its managed schemas, to read
+  `INFORMATION_SCHEMA.TABLES`. Missing access skips the orphan list with a warning, as on
+  BigQuery.
+
+Two documented caveats: `ACCOUNT_USAGE` views lag reality by up to ~45 minutes, and the whole
+adapter was built from Snowflake's published schemas without a live account — the SQL is pinned
+by tests but the first real run is a validation run.
+
 ## ⚙️ Options
 
 ```
 dbt-debt scan
     --project-dir .           your dbt project folder (default: current folder)
     --target-path target      where manifest.json and catalog.json live
-    --project <id>            which Google Cloud project to query (default: read from your models)
-    --region US               which BigQuery region your query log is in
+    --warehouse <name>        bigquery or snowflake (default: read from the manifest)
+    --project <id>            which database to query — the GCP project on BigQuery, the
+                              database on Snowflake (default: read from your models)
+    --region US               which BigQuery region your query log is in (BigQuery only)
+    --connection <name>       named Snowflake connection from connections.toml (Snowflake only)
     --lookback-days 180       how far back to look; 180 is also the max BigQuery keeps
     --query-comment-pattern   how to recognise dbt's own queries (a regex)
     --columns                 also check which columns are unused (default: models only)
     --min-age-days 7          tables first seen in the query log more recently than this are
                               "too new to judge", not unused (0 disables the guard)
+    --rare-threshold 5        models queried at most this many times are "rarely used"
+                              (0 disables the band)
     --top-n 10                how many unused assets the summary list shows
     --detail                  list every unused table and column (grouped by model, with file paths)
     --format text|json        json always includes the full list
@@ -146,8 +175,9 @@ dbt-debt scan
 
 Exit codes: `0` the scan completed (including degraded scans — say, orphans skipped for lack of
 access); `2` a local problem (a missing or malformed manifest/catalog, an invalid option, an
-unwritable output path); `3` a warehouse problem (not signed in, missing the required
-permission, or any BigQuery error mid-scan); `130` interrupted with Ctrl-C.
+unsupported adapter, an unwritable output path); `3` a warehouse problem (not signed in, missing
+the required permission, a missing optional connector, or any warehouse error mid-scan); `130`
+interrupted with Ctrl-C.
 
 ## 🛠️ Working on dbt-debt
 

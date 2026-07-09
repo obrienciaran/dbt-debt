@@ -8,7 +8,14 @@ appear once the column stage populates them. By default only the top few dead as
 
 from __future__ import annotations
 
-from dbt_debt.report.scorecard import DeadColumn, DeadModel, OrphanReport, Scorecard
+from dbt_debt.report.scorecard import (
+    DeadColumn,
+    DeadModel,
+    OrphanReport,
+    RarelyUsedModel,
+    Scorecard,
+)
+from dbt_debt.verdict.coverage import Coverage
 
 _UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
@@ -51,10 +58,15 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
         f"  ✓ {scorecard.active_models} active",
         f"  ✗ {scorecard.unused_models} unused{_dead_kind_breakdown(scorecard.dead_models)}",
     ]
+    if scorecard.rarely_used:
+        lines.append(
+            f"  ~ {len(scorecard.rarely_used)} rarely used "
+            f"(at most {scorecard.rare_threshold} queries; not counted in 'unused')"
+        )
     if scorecard.too_new_models:
         lines.append(
             f"  ? {len(scorecard.too_new_models)} too new to judge "
-            "(first seen recently; not counted as unused)"
+            "(first seen recently; not counted in 'unused')"
         )
     if columns is not None:
         lines += [
@@ -64,6 +76,8 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
         ]
     if scorecard.orphans is not None:
         lines += _orphan_summary_lines(scorecard.orphans)
+    if scorecard.coverage is not None:
+        lines += _coverage_lines(scorecard.coverage)
 
     lines += [
         "",
@@ -111,6 +125,28 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
         ]
         lines += [f"  {i}. {_format_model(m)}" for i, m in enumerate(shown_models, start=1)]
 
+    if scorecard.rarely_used:
+        total = len(scorecard.rarely_used)
+        shown_rare = scorecard.rarely_used[:top_n]
+        lines += [
+            "",
+            f"Top {len(shown_rare)} of {total} rarely used models "
+            f"(at most {scorecard.rare_threshold} queries in {scorecard.lookback_days} days; "
+            "largest first):",
+        ]
+        lines += [f"  {i}. {_format_rare(m)}" for i, m in enumerate(shown_rare, start=1)]
+
+    if scorecard.unpartitioned_tables:
+        count = len(scorecard.unpartitioned_tables)
+        lines += [
+            "",
+            f"Large tables with neither partition_by nor cluster_by ({count}; every query "
+            "scans them in full):",
+        ]
+        for table in scorecard.unpartitioned_tables:
+            size = humanize_bytes(table.total_bytes)
+            lines.append(f"  - {table.name} ({size}, {table.materialized})")
+
     if detail:
         lines += _detail_section(scorecard)
 
@@ -126,16 +162,52 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
     """
 
     lines = _detail_models(scorecard.dead_models)
+    if scorecard.rarely_used:
+        lines += ["", f"Rarely used models ({len(scorecard.rarely_used)}):"]
+        for rare in scorecard.rarely_used:
+            path = f"  {rare.file_path}" if rare.file_path else ""
+            lines.append(f"  - {_format_rare(rare)}{path}")
     if scorecard.too_new_models:
         lines += ["", f"Too new to judge ({len(scorecard.too_new_models)}):"]
         for model in scorecard.too_new_models:
             path = f"  {model.file_path}" if model.file_path else ""
             lines.append(f"  - {model.name}{_kind_tag(model)}{path}")
+    if scorecard.unpartitioned_tables:
+        count = len(scorecard.unpartitioned_tables)
+        lines += ["", f"Large tables with neither partition_by nor cluster_by ({count}):"]
+        for table in scorecard.unpartitioned_tables:
+            path = f"  {table.file_path}" if table.file_path else ""
+            size = humanize_bytes(table.total_bytes)
+            lines.append(f"  - {table.name} ({size}, {table.materialized}){path}")
     columns = scorecard.columns
     if columns is not None:
         lines += _detail_columns(columns.dead_columns)
     if scorecard.orphans is not None:
         lines += _detail_orphans(scorecard.orphans)
+    return lines
+
+
+def _pct(count: int, total: int) -> str:
+    return f"{100 * count / total:.0f}%" if total else "0%"
+
+
+def _coverage_lines(cov: Coverage) -> list[str]:
+    """The three one-sentence hygiene figures: tests, table-level docs, column-level docs."""
+
+    lines = [
+        "Coverage:",
+        f"  - tests: {cov.tested_models} of {_plural(cov.total_models, 'model')} have at "
+        f"least one test ({_pct(cov.tested_models, cov.total_models)})",
+        f"  - docs: {cov.documented_models} of {_plural(cov.total_models, 'model')} have a "
+        f"description ({_pct(cov.documented_models, cov.total_models)})",
+    ]
+    if cov.total_columns:
+        source = "catalog" if cov.column_source == "catalog" else "declared"
+        lines.append(
+            f"  - docs: {cov.documented_columns} of {_plural(cov.total_columns, 'column')} "
+            f"have a description ({_pct(cov.documented_columns, cov.total_columns)}, "
+            f"{source} columns)"
+        )
     return lines
 
 
@@ -245,6 +317,19 @@ def _dead_kind_breakdown(dead_models: tuple[DeadModel, ...]) -> str:
 def _format_model(model: DeadModel) -> str:
     size = f" ({humanize_bytes(model.total_bytes)})" if model.total_bytes > 0 else ""
     return f"{model.name}{_kind_tag(model)}{size}"
+
+
+def _format_rare(model: RarelyUsedModel) -> str:
+    """`name (2 queries, last 2026-06-14, 1.2 GB)` — the evidence an owner needs to judge it."""
+
+    count = model.query_count
+    parts = [f"{count} query" if count == 1 else f"{count} queries"]
+    if model.last_queried:
+        parts.append(f"last {model.last_queried[:10]}")
+    if model.total_bytes > 0:
+        parts.append(humanize_bytes(model.total_bytes))
+    kind = f" ({model.resource_type})" if model.resource_type != "model" else ""
+    return f"{model.name}{kind} ({', '.join(parts)})"
 
 
 def _format_column(column: DeadColumn) -> str:

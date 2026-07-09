@@ -10,16 +10,18 @@ from __future__ import annotations
 
 
 def validate_query_comment_pattern(pattern: str) -> None:
-    """Reject a pattern that cannot sit inside the raw triple-quoted SQL string.
+    """Reject a pattern that cannot sit inside either warehouse's raw SQL string literal.
 
-    A pattern containing `'''` (or ending in `'`) would terminate the string early and produce a
-    confusing BigQuery syntax error, so we refuse it up front with a message that names the flag.
+    A pattern containing `'''` (or ending in `'`) would terminate BigQuery's raw triple-quoted
+    string early, and one containing `$$` would terminate Snowflake's dollar-quoted string, each
+    producing a confusing warehouse syntax error — so we refuse both up front with a message
+    that names the flag.
     """
 
-    if "'''" in pattern or pattern.endswith("'"):
+    if "'''" in pattern or pattern.endswith("'") or "$$" in pattern:
         raise ValueError(
-            "--query-comment-pattern must not contain ''' or end with a single quote; "
-            "it is embedded in a triple-quoted BigQuery string."
+            "--query-comment-pattern must not contain ''' or $$ or end with a single quote; "
+            "it is embedded in a raw SQL string (BigQuery r'''...''', Snowflake $$...$$)."
         )
 
 

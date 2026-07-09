@@ -13,6 +13,7 @@ from dbt_debt.report.scorecard import (
     DeadColumn,
     DeadModel,
     OrphanReport,
+    RarelyUsedModel,
     Scorecard,
 )
 
@@ -104,11 +105,94 @@ def test_render_text_lists_too_new_nodes_separately() -> None:
         ),
     )
     text = render_text(card, detail=True)
-    assert "? 1 too new to judge (first seen recently; not counted as unused)" in text
+    assert "? 1 too new to judge (first seen recently; not counted in 'unused')" in text
     assert "Too new to judge (1):" in text
     assert "  - brand_new  models/new.sql" in text
     # The unused list stays clean of it.
     assert "Unused models (1):" in text
+
+
+def test_render_text_lists_rarely_used_band_with_its_evidence() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=2,
+        unused_models=0,
+        rarely_used=(
+            RarelyUsedModel(
+                unique_id="model.x.dim",
+                name="dim_old",
+                relation_key="p.d.dim_old",
+                query_count=2,
+                last_queried="2026-06-14T12:00:00+00:00",
+                total_bytes=2048,
+                file_path="models/dim_old.sql",
+            ),
+            RarelyUsedModel(
+                unique_id="seed.x.codes",
+                name="codes",
+                relation_key="p.d.codes",
+                query_count=1,
+                last_queried=None,
+                total_bytes=0,
+                resource_type="seed",
+            ),
+        ),
+        rare_threshold=5,
+    )
+    text = render_text(card, detail=True)
+    assert "~ 2 rarely used (at most 5 queries; not counted in 'unused')" in text
+    assert "Top 2 of 2 rarely used models" in text
+    assert "dim_old (2 queries, last 2026-06-14, 2.0 KB)" in text
+    # No last-queried or size shown when unknown; non-model kinds are tagged.
+    assert "codes (seed) (1 query)" in text
+    assert "Rarely used models (2):" in text
+    assert "models/dim_old.sql" in text
+    # JSON carries the band verbatim (last_queried is already a string).
+    data = json.loads(render_json(card))
+    assert data["rarely_used"][0]["query_count"] == 2
+    assert data["rare_threshold"] == 5
+
+
+def test_render_text_coverage_sentences_and_unpartitioned_tables() -> None:
+    from dbt_debt.report.scorecard import UnpartitionedTable
+    from dbt_debt.verdict.coverage import Coverage
+
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=3,
+        unused_models=0,
+        coverage=Coverage(
+            tested_models=2,
+            documented_models=1,
+            total_models=3,
+            documented_columns=4,
+            total_columns=10,
+            column_source="catalog",
+        ),
+        unpartitioned_tables=(
+            UnpartitionedTable(
+                unique_id="model.x.events",
+                name="events",
+                relation_key="p.d.events",
+                total_bytes=12 * 1024**3,
+                materialized="table",
+                file_path="models/events.sql",
+            ),
+        ),
+    )
+    text = render_text(card, detail=True)
+    assert "Coverage:" in text
+    assert "- tests: 2 of 3 models have at least one test (67%)" in text
+    assert "- docs: 1 of 3 models have a description (33%)" in text
+    assert "- docs: 4 of 10 columns have a description (40%, catalog columns)" in text
+    assert "Large tables with neither partition_by nor cluster_by (1" in text
+    assert "- events (12.0 GB, table)" in text
+    assert "models/events.sql" in text
+    data = json.loads(render_json(card))
+    assert data["coverage"]["tested_models"] == 2
+    assert data["unpartitioned_tables"][0]["name"] == "events"
 
 
 def test_render_text_tags_dead_seeds_and_snapshots() -> None:

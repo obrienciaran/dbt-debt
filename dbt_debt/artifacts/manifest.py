@@ -79,10 +79,12 @@ def parse_manifest(data: dict[str, Any]) -> Manifest:
                 depends_on=_depends_on(node),
             )
 
+    adapter_type = metadata.get("adapter_type")
     return Manifest(
         project_name=str(metadata.get("project_name", "")),
         dbt_schema_version=schema_version,
         dbt_version=metadata.get("dbt_version"),
+        adapter_type=str(adapter_type).lower() if adapter_type else None,
         models=models,
         tests=tests,
         exposures=exposures,
@@ -95,7 +97,14 @@ def _parse_model(unique_id: str, node: dict[str, Any], resource_type: str = "mod
     # Column names are lowercased here (and in the catalog and test parsers) so every layer
     # compares them the same way, matching the relation_key normalization. Seeds and snapshots
     # share the node shape; a seed simply has no compiled_code and no dependencies.
-    columns = tuple(name.lower() for name in as_dict(node.get("columns")))
+    columns_map = as_dict(node.get("columns"))
+    columns = tuple(name.lower() for name in columns_map)
+    documented = tuple(
+        name.lower()
+        for name, column in columns_map.items()
+        if isinstance(column, dict) and _has_text(column.get("description"))
+    )
+    config = as_dict(node.get("config"))
     return Model(
         unique_id=unique_id,
         name=node.get("name", ""),
@@ -105,10 +114,21 @@ def _parse_model(unique_id: str, node: dict[str, Any], resource_type: str = "mod
         original_file_path=node.get("original_file_path"),
         depends_on=_depends_on(node),
         columns=columns,
+        documented_columns=documented,
         contract_enforced=bool(as_dict(node.get("contract")).get("enforced", False)),
         compiled_code=node.get("compiled_code"),
         resource_type=resource_type,
+        has_description=_has_text(node.get("description")),
+        materialized=config.get("materialized"),
+        partitioned=bool(config.get("partition_by")),
+        clustered=bool(config.get("cluster_by")),
     )
+
+
+def _has_text(value: Any) -> bool:
+    """True for a non-empty, non-whitespace description; dbt writes "" when none was given."""
+
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _parse_test(unique_id: str, node: dict[str, Any]) -> Test:

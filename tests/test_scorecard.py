@@ -6,11 +6,11 @@ from pathlib import Path
 
 from dbt_debt.artifacts.graph import Graph
 from dbt_debt.artifacts.manifest import load_manifest
-from dbt_debt.cli import _emit, _infer_project, _scan
+from dbt_debt.cli import _emit, _infer_database, _scan
 from dbt_debt.config import Config
 from dbt_debt.domain import UsageRow
 from dbt_debt.report.scorecard import ColumnReport, DeadColumn, build_scorecard
-from tests.fakes import FakeBigQueryClient
+from tests.fakes import FakeWarehouseClient
 
 FIXTURE = Path(__file__).parent / "fixtures" / "manifest.json"
 
@@ -137,17 +137,104 @@ def test_dead_model_flags_its_semantic_consumers() -> None:
     assert alive.affected_semantic == ()
 
 
+def test_rarely_used_band_reports_usage_and_bytes_without_touching_unused_figures() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    from datetime import datetime, timezone
+
+    when = datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc)
+    usage = [UsageRow(relation_key=FCT_KEY, query_count=2, last_queried=when)]
+    storage = {FCT_KEY: 2048}
+    card = build_scorecard(manifest, graph, usage, storage, _config())
+
+    # fct is queried (so alive, keeping its ancestors alive) but lands in the review band
+    # with the evidence attached; nothing unused-derived changes.
+    assert (card.active_models, card.unused_models) == (3, 0)
+    assert card.rare_threshold == 5
+    assert [(r.name, r.query_count, r.total_bytes) for r in card.rarely_used] == [
+        ("fct_orders", 2, 2048)
+    ]
+    assert card.rarely_used[0].last_queried == when.isoformat()
+    assert card.removable_tests == ()
+    assert card.reclaimable_bytes == 0
+
+
+def test_rare_threshold_zero_disables_the_band() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    usage = [UsageRow(relation_key=FCT_KEY, query_count=1)]
+    config = Config(
+        project_dir=FIXTURE.parent.parent, target_path=FIXTURE.parent.name, rare_threshold=0
+    )
+    card = build_scorecard(manifest, graph, usage, {}, config)
+    assert card.rarely_used == ()
+    assert card.rare_threshold == 0
+
+
+def test_busy_models_stay_out_of_the_band() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    usage = [UsageRow(relation_key=FCT_KEY, query_count=100)]
+    card = build_scorecard(manifest, graph, usage, {}, _config())
+    assert card.rarely_used == ()
+
+
+def test_too_new_models_are_excluded_from_the_band_too() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    # fct was created two days ago and queried twice — it has not had a full window to
+    # accumulate queries, so calling it rarely used would be as false-confident as calling a
+    # too-new model unused.
+    usage = [UsageRow(relation_key=FCT_KEY, query_count=2)]
+    first_seen = {FCT_KEY: now - timedelta(days=2)}
+    card = build_scorecard(manifest, graph, usage, {}, _config(), first_seen=first_seen, now=now)
+    assert card.rarely_used == ()
+
+
 def test_scan_orchestration_via_fake_client() -> None:
-    client = FakeBigQueryClient(usage=[UsageRow(relation_key=FCT_KEY, query_count=1)])
+    client = FakeWarehouseClient(usage=[UsageRow(relation_key=FCT_KEY, query_count=1)])
     card = _scan(_config(), client)
     assert card.project_name == "jaffle_shop"
     assert (card.active_models, card.unused_models) == (3, 0)
 
 
-def test_infer_project_from_model_database() -> None:
+def test_scorecard_always_carries_coverage() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    card = build_scorecard(manifest, graph, [], {}, _config())
+    assert card.coverage is not None
+    assert card.coverage.total_models == 3
+    # The fixture test guards fct_orders, so exactly one model is tested.
+    assert card.coverage.tested_models == 1
+    assert card.coverage.column_source == "manifest"
+
+
+def test_partitioning_check_is_bigquery_only() -> None:
+    manifest = load_manifest(FIXTURE)
+    for model in manifest.models.values():
+        model.materialized = "table"
+    graph = Graph.from_manifest(manifest)
+    storage = {FCT_KEY: 5 * 1024**3}
+
+    card = build_scorecard(manifest, graph, [], storage, _config())
+    assert [t.name for t in card.unpartitioned_tables] == ["fct_orders"]
+    assert card.unpartitioned_tables[0].total_bytes == 5 * 1024**3
+
+    snowflake = Config(
+        project_dir=FIXTURE.parent.parent,
+        target_path=FIXTURE.parent.name,
+        warehouse="snowflake",
+    )
+    assert build_scorecard(manifest, graph, [], storage, snowflake).unpartitioned_tables == ()
+
+
+def test_infer_database_from_model_database() -> None:
     manifest = load_manifest(FIXTURE)
     # Fixture models live in database "my-gcp-project"; that is the project to query.
-    assert _infer_project(manifest) == "my-gcp-project"
+    assert _infer_database(manifest) == "my-gcp-project"
 
 
 def test_emit_writes_report_to_file_when_output_given(tmp_path: Path) -> None:

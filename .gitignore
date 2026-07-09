@@ -11,8 +11,8 @@ dist/
 .coverage
 .tox/
 
-# Local live-test dbt project
-demo/
+# Local live-test dbt projects (one per warehouse)
+demo_*/
 
 # dbt run logs
 logs/

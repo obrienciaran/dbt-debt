@@ -1,4 +1,4 @@
-"""The real `BigQueryClient`, the only module that imports `google-cloud-bigquery`.
+"""The BigQuery `WarehouseClient`, the only module that imports `google-cloud-bigquery`.
 
 It composes the pure SQL builders/parsers in `jobs` with a live client. Imports are lazy so the
 rest of the package (and the test suite, via the fake) loads without the BigQuery dependency or
@@ -23,7 +23,7 @@ from dbt_debt.domain import UsageRow, WarehouseRelation
 
 
 class RealBigQueryClient:
-    """Live BigQuery client implementing the `BigQueryClient` Protocol."""
+    """Live BigQuery client implementing the `WarehouseClient` Protocol."""
 
     def __init__(self, config: Config, project: str | None = None) -> None:
         from google.auth.exceptions import DefaultCredentialsError

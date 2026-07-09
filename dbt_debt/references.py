@@ -12,7 +12,7 @@ from dbt_debt.domain import Manifest
 from dbt_debt.sqlparse import SqlParseError, referenced_relations
 
 
-def model_relation_references(manifest: Manifest) -> set[str]:
+def model_relation_references(manifest: Manifest, dialect: str = "bigquery") -> set[str]:
     """Every `project.dataset.table` relation_key any model reads in its compiled SQL.
 
     Models with no compiled SQL, or SQL sqlglot cannot parse, are skipped so one odd model never
@@ -25,7 +25,7 @@ def model_relation_references(manifest: Manifest) -> set[str]:
         if not sql:
             continue
         try:
-            references |= referenced_relations(sql)
+            references |= referenced_relations(sql, dialect)
         except SqlParseError:
             continue
     return references

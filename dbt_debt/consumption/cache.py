@@ -1,11 +1,11 @@
-"""An optional, self-pruning disk cache in front of any `BigQueryClient`.
+"""An optional, self-pruning disk cache in front of any `WarehouseClient`.
 
-`CachingBigQueryClient` is a decorator implementing the `BigQueryClient` Protocol, so it composes
-with the real client and is exercised by the same `FakeBigQueryClient` in tests. It memoizes the
-three slow warehouse round-trips (`table_usage`, `query_texts`, `existing_relations`) to JSON
-files keyed by the query parameters — never the manifest, which warehouse results don't depend on.
-The `jobs.listAll` preflight is delegated, never cached, because permissions can change and the
-check is load-bearing.
+`CachingWarehouseClient` is a decorator implementing the `WarehouseClient` Protocol, so it
+composes with any real client and is exercised by the same `FakeWarehouseClient` in tests. It
+memoizes the slow warehouse round-trips (`table_usage`, `query_texts`, `relation_first_seen`,
+`existing_relations`) to JSON files keyed by the query parameters — never the manifest, which
+warehouse results don't depend on. The permission preflight is delegated, never cached, because
+permissions can change and the check is load-bearing.
 
 Entries carry their creation time and expire after `ttl`: an expired read is a miss (and the file
 is removed), and every cache directory is pruned of expired files on construction. That TTL prune
@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TypeVar
 
-from dbt_debt.consumption.client import BigQueryClient
+from dbt_debt.consumption.client import WarehouseClient
 from dbt_debt.domain import UsageRow, WarehouseRelation
 
 CACHE_ROOT_NAME = "dbt-debt-cache"
@@ -97,12 +97,12 @@ def _relations_from_json(data: list[dict[str, Any]]) -> list[WarehouseRelation]:
     ]
 
 
-class CachingBigQueryClient:
-    """Wrap an inner `BigQueryClient`, serving the slow calls from a TTL-bounded disk cache."""
+class CachingWarehouseClient:
+    """Wrap an inner `WarehouseClient`, serving the slow calls from a TTL-bounded disk cache."""
 
     def __init__(
         self,
-        inner: BigQueryClient,
+        inner: WarehouseClient,
         *,
         cache_dir: Path,
         ttl: timedelta,
@@ -183,7 +183,7 @@ class CachingBigQueryClient:
         """Mark the cache unusable for this run; a cache that can't write must never kill a scan."""
 
         self._disabled = True
-        print(f"scan cache disabled ({exc}); querying BigQuery live.", file=sys.stderr)
+        print(f"scan cache disabled ({exc}); querying the warehouse live.", file=sys.stderr)
 
     @staticmethod
     def _load_entry(path: Path) -> tuple[datetime, object] | None:

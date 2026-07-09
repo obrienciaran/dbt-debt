@@ -7,21 +7,24 @@ extends the structure without changing the model lines.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Set
+from collections.abc import Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from dbt_debt.artifacts.catalog import Catalog
 from dbt_debt.artifacts.graph import Graph
 from dbt_debt.config import Config
-from dbt_debt.consumption.usage import first_seen_model_ids, queried_model_ids
+from dbt_debt.consumption.usage import first_seen_model_ids, model_usage, queried_model_ids
 from dbt_debt.domain import ColumnEdge, ColumnRef, Manifest, UsageRow, WarehouseRelation
 from dbt_debt.verdict.blockers import analyze_columns
 from dbt_debt.verdict.columns import dead_columns
+from dbt_debt.verdict.coverage import Coverage, coverage
 from dbt_debt.verdict.exposures import affected_exposures, unaffected_exposures
 from dbt_debt.verdict.freshness import too_new_models
 from dbt_debt.verdict.models import dead_models
 from dbt_debt.verdict.orphans import orphaned_relations, undeclared_sources
+from dbt_debt.verdict.partitioning import unpartitioned_large_tables
+from dbt_debt.verdict.rarity import rarely_used_models
 from dbt_debt.verdict.semantic import affected_semantic_consumers
 from dbt_debt.verdict.tests import removable_tests
 
@@ -54,6 +57,41 @@ class DeadModel:
     total_bytes: int
     file_path: str | None = None
     resource_type: str = "model"
+
+
+@dataclass(frozen=True)
+class RarelyUsedModel:
+    """A queried node whose few queries put it in the review band, with the usage that dates it.
+
+    `last_queried` is an ISO-8601 string (not a datetime) so the scorecard serializes to JSON
+    unchanged; `total_bytes` sizes what a deprecation would reclaim. Never folded into the
+    unused figures — observed use, however small, is still use.
+    """
+
+    unique_id: str
+    name: str
+    relation_key: str
+    query_count: int
+    last_queried: str | None
+    total_bytes: int
+    file_path: str | None = None
+    resource_type: str = "model"
+
+
+@dataclass(frozen=True)
+class UnpartitionedTable:
+    """A large BigQuery table built with neither `partition_by` nor `cluster_by` declared.
+
+    Sized by *stored* bytes from the catalog (scan cost is not collected); `materialized` says
+    whether it is a plain table or an incremental model.
+    """
+
+    unique_id: str
+    name: str
+    relation_key: str
+    total_bytes: int
+    materialized: str
+    file_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -120,7 +158,14 @@ class Scorecard:
     dead_models: tuple[DeadModel, ...] = field(default_factory=tuple)
     too_new_models: tuple[DeadModel, ...] = ()
     """Unqueried but first seen too recently to judge — a third bucket, not counted unused."""
+    rarely_used: tuple[RarelyUsedModel, ...] = ()
+    """Queried at most `rare_threshold` times — a review band, never counted unused."""
+    rare_threshold: int = 0
     reclaimable_bytes: int = 0
+    coverage: Coverage | None = None
+    """Test/docs coverage counts; None only on handcrafted scorecards (assembly always sets it)."""
+    unpartitioned_tables: tuple[UnpartitionedTable, ...] = ()
+    """BigQuery only: large tables declaring neither partition_by nor cluster_by."""
     columns: ColumnReport | None = None
     orphans: OrphanReport | None = None
 
@@ -141,24 +186,32 @@ def build_scorecard(
     orphan_report: OrphanReport | None = None,
     first_seen: Mapping[str, datetime] | None = None,
     now: datetime | None = None,
+    catalog_columns: Mapping[str, Sequence[str]] | None = None,
 ) -> Scorecard:
     """Combine usage, DAG propagation, and manifest traversals into a `Scorecard`.
 
     `first_seen` (relation_key -> earliest job) drives the too-new guard: an unqueried node
     younger than `config.min_age_days` is set aside as "too new to judge" and excluded from
     every unused-derived figure — the count, the removable tests, the exposure and semantic
-    impact, and the reclaimable bytes. `now` is injectable for tests.
+    impact, and the reclaimable bytes. Queried nodes with at most `config.rare_threshold`
+    queries land in the separate rarely-used review band, which feeds none of those figures
+    either. `now` is injectable for tests.
     """
 
+    usage_rows = list(usage_rows)
     queried = queried_model_ids(manifest, usage_rows)
     unqueried = dead_models(manifest, graph, queried)
-    too_new = too_new_models(
-        unqueried,
-        first_seen_model_ids(manifest, first_seen or {}),
-        now or datetime.now(timezone.utc),
-        timedelta(days=config.min_age_days),
-    )
+    first_seen_ids = first_seen_model_ids(manifest, first_seen or {})
+    now_utc = now or datetime.now(timezone.utc)
+    min_age = timedelta(days=config.min_age_days)
+    too_new = too_new_models(unqueried, first_seen_ids, now_utc, min_age)
     dead = unqueried - too_new
+
+    # The rarity band gets the same too-new protection as the dead set: a model created
+    # mid-window has not had a full window to accumulate queries.
+    usage_by_model = model_usage(manifest, usage_rows)
+    rare = rarely_used_models(usage_by_model, config.rare_threshold)
+    rare -= too_new_models(rare, first_seen_ids, now_utc, min_age)
 
     # When the column stage ran, tests guarding a dead column are removable too — rebuild the
     # (model, column) refs the tests verdict compares against from the ranked dead list.
@@ -171,6 +224,39 @@ def build_scorecard(
     # Storage reclaimed by dropping the whole dead tables. Only whole dead models have a real
     # figure — BigQuery reports no per-column size, so dead columns are not summed here.
     reclaimable = sum(_model_bytes(manifest, storage_bytes, uid) for uid in dead)
+
+    def rarely_used_entry(uid: str) -> RarelyUsedModel:
+        row = usage_by_model[uid]
+        return RarelyUsedModel(
+            unique_id=uid,
+            name=manifest.models[uid].name,
+            relation_key=manifest.models[uid].relation_key,
+            query_count=row.query_count,
+            last_queried=row.last_queried.isoformat() if row.last_queried else None,
+            total_bytes=_model_bytes(manifest, storage_bytes, uid),
+            file_path=manifest.models[uid].original_file_path,
+            resource_type=manifest.models[uid].resource_type,
+        )
+
+    def ranked_rarely_used(uids: Set[str]) -> tuple[RarelyUsedModel, ...]:
+        ranked = sorted(uids, key=lambda uid: (-_model_bytes(manifest, storage_bytes, uid), uid))
+        return tuple(rarely_used_entry(uid) for uid in ranked)
+
+    # The partitioning check is BigQuery-specific: Snowflake micro-partitions automatically and
+    # its explicit clustering keys are optional tuning, not debt.
+    unpartitioned: tuple[UnpartitionedTable, ...] = ()
+    if config.warehouse == "bigquery":
+        unpartitioned = tuple(
+            UnpartitionedTable(
+                unique_id=uid,
+                name=manifest.models[uid].name,
+                relation_key=manifest.models[uid].relation_key,
+                total_bytes=_model_bytes(manifest, storage_bytes, uid),
+                materialized=manifest.models[uid].materialized or "table",
+                file_path=manifest.models[uid].original_file_path,
+            )
+            for uid in unpartitioned_large_tables(manifest.models, storage_bytes)
+        )
 
     def ranked_assets(uids: Set[str]) -> tuple[DeadModel, ...]:
         ranked = sorted(uids, key=lambda uid: (-_model_bytes(manifest, storage_bytes, uid), uid))
@@ -205,7 +291,11 @@ def build_scorecard(
         ),
         dead_models=ranked_assets(dead),
         too_new_models=ranked_assets(too_new),
+        rarely_used=ranked_rarely_used(rare),
+        rare_threshold=config.rare_threshold,
         reclaimable_bytes=reclaimable,
+        coverage=coverage(manifest, catalog_columns),
+        unpartitioned_tables=unpartitioned,
         columns=column_report,
         orphans=orphan_report,
     )

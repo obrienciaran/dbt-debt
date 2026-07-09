@@ -57,9 +57,17 @@ class Model:
     original_file_path: str | None = None
     depends_on: tuple[str, ...] = ()
     columns: tuple[str, ...] = ()
+    documented_columns: tuple[str, ...] = ()
+    """The subset of `columns` carrying a non-empty description, for docs coverage."""
     contract_enforced: bool = False
     compiled_code: str | None = None
     resource_type: str = "model"
+    has_description: bool = False
+    materialized: str | None = None
+    partitioned: bool = False
+    """True when the node declares `partition_by` (BigQuery) in its config."""
+    clustered: bool = False
+    """True when the node declares `cluster_by` in its config."""
 
     @property
     def relation_key(self) -> str:
@@ -181,6 +189,8 @@ class Manifest:
     project_name: str
     dbt_schema_version: str
     dbt_version: str | None
+    adapter_type: str | None = None
+    """The dbt adapter that produced the artifacts (e.g. "bigquery", "snowflake")."""
     models: dict[str, Model] = field(default_factory=dict)
     tests: dict[str, Test] = field(default_factory=dict)
     exposures: dict[str, Exposure] = field(default_factory=dict)

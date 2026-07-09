@@ -1,6 +1,6 @@
 """Tests for the TTL disk cache that fronts the BigQuery client.
 
-A counting `FakeBigQueryClient` stands in for the warehouse: a hit serves the second call from
+A counting `FakeWarehouseClient` stands in for the warehouse: a hit serves the second call from
 disk without touching the inner client, a key change or an expired entry forces a re-fetch, and
 the prune-on-construction sweep is the teardown that keeps the cache from persisting forever.
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from dbt_debt.consumption.cache import (
-    CachingBigQueryClient,
+    CachingWarehouseClient,
     _relations_from_json,
     _relations_to_json,
     _usage_from_json,
@@ -22,20 +22,20 @@ from dbt_debt.consumption.cache import (
     cache_dir_for,
 )
 from dbt_debt.domain import UsageRow, WarehouseRelation
-from tests.fakes import FakeBigQueryClient
+from tests.fakes import FakeWarehouseClient
 
 _KEY = {"project": "p", "region": "US", "lookback_days": "180", "query_comment_pattern": "x"}
 _DAY = timedelta(hours=24)
 
 
 def _client(
-    inner: FakeBigQueryClient, cache_dir: Path, ttl: timedelta = _DAY
-) -> CachingBigQueryClient:
-    return CachingBigQueryClient(inner, cache_dir=cache_dir, ttl=ttl, key_parts=_KEY)
+    inner: FakeWarehouseClient, cache_dir: Path, ttl: timedelta = _DAY
+) -> CachingWarehouseClient:
+    return CachingWarehouseClient(inner, cache_dir=cache_dir, ttl=ttl, key_parts=_KEY)
 
 
 def test_second_call_is_served_from_disk(tmp_path: Path) -> None:
-    inner = FakeBigQueryClient(usage=[UsageRow("a.b.c", 3)])
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
     client = _client(inner, tmp_path)
 
     first = client.table_usage()
@@ -46,26 +46,26 @@ def test_second_call_is_served_from_disk(tmp_path: Path) -> None:
 
 
 def test_a_fresh_caching_client_reuses_the_file_on_disk(tmp_path: Path) -> None:
-    inner = FakeBigQueryClient(usage=[UsageRow("a.b.c", 3)])
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
     _client(inner, tmp_path).table_usage()
     # A brand-new wrapper over a fresh inner client still hits the cache file from the first run.
-    other = FakeBigQueryClient(usage=[UsageRow("a.b.c", 99)])
+    other = FakeWarehouseClient(usage=[UsageRow("a.b.c", 99)])
     assert _client(other, tmp_path).table_usage() == [UsageRow("a.b.c", 3)]
     assert other.calls["table_usage"] == 0
 
 
 def test_changing_a_key_part_misses(tmp_path: Path) -> None:
-    inner = FakeBigQueryClient(usage=[UsageRow("a.b.c", 3)])
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
     _client(inner, tmp_path).table_usage()
 
     other_key = dict(_KEY, region="EU")
-    CachingBigQueryClient(inner, cache_dir=tmp_path, ttl=_DAY, key_parts=other_key).table_usage()
+    CachingWarehouseClient(inner, cache_dir=tmp_path, ttl=_DAY, key_parts=other_key).table_usage()
 
     assert inner.calls["table_usage"] == 2
 
 
 def test_permission_preflight_is_never_cached(tmp_path: Path) -> None:
-    inner = FakeBigQueryClient()
+    inner = FakeWarehouseClient()
     client = _client(inner, tmp_path)
     client.assert_usage_permission()
     client.assert_usage_permission()
@@ -74,7 +74,7 @@ def test_permission_preflight_is_never_cached(tmp_path: Path) -> None:
 
 def test_existing_relations_keys_on_the_datasets(tmp_path: Path) -> None:
     rel = WarehouseRelation("p.staging.t", "BASE TABLE")
-    inner = FakeBigQueryClient(existing=[rel])
+    inner = FakeWarehouseClient(existing=[rel])
     client = _client(inner, tmp_path)
 
     client.existing_relations({"staging"})
@@ -86,9 +86,9 @@ def test_existing_relations_keys_on_the_datasets(tmp_path: Path) -> None:
 
 
 def test_expired_entry_is_refetched_and_removed(tmp_path: Path) -> None:
-    inner = FakeBigQueryClient(usage=[UsageRow("a.b.c", 3)])
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
     # A one-hour TTL with a two-hour-old entry: stale.
-    client = CachingBigQueryClient(
+    client = CachingWarehouseClient(
         inner, cache_dir=tmp_path, ttl=timedelta(hours=1), key_parts=_KEY
     )
     client.table_usage()
@@ -100,7 +100,7 @@ def test_expired_entry_is_refetched_and_removed(tmp_path: Path) -> None:
 
 
 def test_prune_on_construction_removes_old_files(tmp_path: Path) -> None:
-    inner = FakeBigQueryClient(usage=[UsageRow("a.b.c", 3)])
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
     _client(inner, tmp_path).table_usage()
     (path,) = list(tmp_path.glob("*.json"))
     _backdate(path, hours=48)
@@ -111,7 +111,7 @@ def test_prune_on_construction_removes_old_files(tmp_path: Path) -> None:
 
 
 def test_corrupt_entry_is_treated_as_a_miss(tmp_path: Path) -> None:
-    inner = FakeBigQueryClient(usage=[UsageRow("a.b.c", 3)])
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
     client = _client(inner, tmp_path)
     (tmp_path / "garbage.json").write_text("not json")
     client.table_usage()  # prune already ran on construction; a fetch still works
@@ -121,12 +121,12 @@ def test_corrupt_entry_is_treated_as_a_miss(tmp_path: Path) -> None:
 def test_valid_json_of_the_wrong_shape_is_also_a_miss(tmp_path: Path) -> None:
     # Regression: a cache file holding a JSON list (not the expected dict) used to raise an
     # uncaught TypeError from the prune sweep and kill the scan.
-    inner = FakeBigQueryClient(query_texts=["q"])
+    inner = FakeWarehouseClient(query_texts=["q"])
     _client(inner, tmp_path).query_texts()
     for path in tmp_path.glob("*.json"):
         path.write_text("[1, 2]")
 
-    fresh_inner = FakeBigQueryClient(query_texts=["q"])
+    fresh_inner = FakeWarehouseClient(query_texts=["q"])
     assert _client(fresh_inner, tmp_path).query_texts() == ["q"]
     assert fresh_inner.calls["query_texts"] == 1
 
@@ -173,7 +173,7 @@ def test_no_command_without_clear_cache_returns_two() -> None:
 
 def test_first_seen_round_trips_through_the_cache(tmp_path: Path) -> None:
     when = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    inner = FakeBigQueryClient(first_seen={"p.d.t": when})
+    inner = FakeWarehouseClient(first_seen={"p.d.t": when})
     client = _client(inner, tmp_path)
     assert client.relation_first_seen() == {"p.d.t": when}
     # Second call is served from disk with the datetime intact.
@@ -190,7 +190,7 @@ def test_unwritable_cache_dir_fails_open(
     parent.mkdir()
     parent.chmod(0o500)
     try:
-        inner = FakeBigQueryClient(usage=[UsageRow("a.b.c", 3)])
+        inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
         client = _client(inner, parent / "cache")
         assert client.table_usage() == [UsageRow("a.b.c", 3)]
         assert client.table_usage() == [UsageRow("a.b.c", 3)]

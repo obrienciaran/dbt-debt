@@ -130,9 +130,10 @@ core loop: the ACCESS_HISTORY flatten + QUERY_HISTORY join returned exact per-re
 (worksheet queries matched 4/1/1/1), the dbt query-comment exclusion held (builds did not count
 as use), orphan discovery found the hand-planted table through the case normalization, and the
 scan exited 0 end to end. Observed ACCESS_HISTORY lag was ~20 minutes, well inside the
-documented worst case. Two observations from that run: the first-seen/too-new guard could not
-be judged (see the first-seen bullet), and no reclaimable-bytes figures appeared — whether
-dbt-snowflake's `catalog.json` stats use a different key than we read is an open check.
+documented worst case. A second scan the same day, after `ACCOUNT_USAGE.TABLES` caught up,
+confirmed the first-seen/too-new guard (see the first-seen bullet). Still open from that run:
+no reclaimable-bytes figures appeared — whether dbt-snowflake's `catalog.json` stats use a
+different key than we read is an open check.
 Design decisions, and the inferences still to confirm:
 
 - **Usage comes from `ACCOUNT_USAGE.ACCESS_HISTORY`** (`direct_objects_accessed`, flattened, one
@@ -146,11 +147,12 @@ Design decisions, and the inferences still to confirm:
   `MIN(created)` over all rows for a name, counting rows whose `deleted` is set, so dbt's
   `CREATE OR REPLACE` rebuilds don't reset the age. Same reasoning as BigQuery's JOBS-not-TABLES
   choice. *Unverified inference:* that dropped incarnations are retained long enough to matter.
-  *Still open after the 2026-07-09 run:* `ACCOUNT_USAGE.TABLES` lags further behind than
-  ACCESS_HISTORY, so 20-minute-old tables had no first-seen row yet and a brand-new dead model
-  showed as unused rather than too-new at the default `--min-age-days` — re-check with
-  `--no-cache` once the view catches up, and decide whether a missing first-seen should be
-  treated as too-new rather than judgeable.
+  *Confirmed live 2026-07-09 (second scan):* once `ACCOUNT_USAGE.TABLES` caught up (it lags
+  further behind than ACCESS_HISTORY — the first scan saw usage but no first-seen rows), the
+  brand-new dead model moved from unused to too-new at the default `--min-age-days`, its test
+  left the removable count, and the guard also emptied the rarely-used band as designed. *Design
+  question left open by the lag window:* a node with usage but no first-seen row yet is judged
+  rather than set aside — decide whether a missing first-seen should mean too-new.
 - **The dbt exclusion assumes dbt's query-comment lands in `query_text`** (it does on BigQuery);
   the pattern sits in a `$$...$$` dollar-quoted string (Snowflake's no-escape literal) inside
   `REGEXP_COUNT(...) = 0`, because Snowflake's `REGEXP_LIKE` anchors to the whole string.

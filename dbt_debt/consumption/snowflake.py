@@ -110,6 +110,12 @@ class RealSnowflakeClient:
             ) from exc
         return jobs.parse_relation_rows(rows)
 
+    def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
+        if not datasets:
+            return {}
+        sql = snowflake_queries.source_last_modified_query(datasets)
+        return jobs.parse_last_modified_rows(self._run_wrapped(sql, "source freshness"))
+
     def _run_wrapped(self, sql: str, stage: str) -> list[dict[str, Any]]:
         """Run one query with *every* failure translated, for stages past the preflight.
 

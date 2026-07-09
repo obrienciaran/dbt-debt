@@ -171,15 +171,21 @@ class SemanticConsumer:
 class Relation:
     """A dbt source: a warehouse relation dbt reads but does not build.
 
-    Carries only what the orphan check needs — the `relation_key` to subtract from the warehouse
-    inventory and the owning `schema`. Sources are only read, so their datasets are external
-    inputs and never searched for orphans. (Seeds and snapshots, which dbt *builds*, live in
-    `Manifest.models` with their `resource_type` tag.)
+    Carries the `relation_key` the orphan check subtracts from the warehouse inventory, the
+    owning `schema`, and the display `name` / `original_file_path` the unused-source report
+    shows. Sources are only read, so their datasets are external inputs and never searched for
+    orphans. (Seeds and snapshots, which dbt *builds*, live in `Manifest.models` with their
+    `resource_type` tag.)
     """
 
     unique_id: str
     relation_key: str
     schema: str | None
+    name: str = ""
+    """Display name, `source_name.table` as written in sources.yml."""
+    original_file_path: str | None = None
+    database: str | None = None
+    """The database (GCP project / Snowflake database) the source table lives in."""
 
 
 @dataclass
@@ -229,3 +235,19 @@ class Manifest:
 
         schemas = {model.schema for model in self.models.values()}
         return {schema.strip(' `"') for schema in schemas if schema}
+
+    def source_datasets(self) -> set[str]:
+        """`database.schema` keys for the declared sources — where staleness metadata is read.
+
+        Quotes are stripped but case is preserved, matching `managed_datasets`: on BigQuery
+        these name a dataset-qualified metadata table and dataset ids are case-sensitive.
+        Sources missing a database or schema are skipped (their staleness cannot be checked).
+        """
+
+        quotes = ' `"'
+        pairs = {
+            (relation.database.strip(quotes), relation.schema.strip(quotes))
+            for relation in self.relations.values()
+            if relation.database and relation.schema
+        }
+        return {f"{database}.{schema}" for database, schema in pairs}

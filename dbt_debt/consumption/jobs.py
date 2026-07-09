@@ -143,6 +143,38 @@ def existing_relations_query(project: str, datasets: Iterable[str]) -> str:
     return "\nUNION ALL\n".join(selects)
 
 
+def source_last_modified_query(datasets: Iterable[str]) -> str:
+    """When each table in `datasets` (each a `project.dataset`) last received data.
+
+    Reads each dataset's legacy `__TABLES__` metadata table, whose `last_modified_time`
+    (epoch milliseconds) is updated by loads and streaming writes alike, and which needs only
+    read access to that dataset — the same optional grant as orphan discovery. Source datasets
+    can live in other GCP projects, hence the project-qualified keys. (Inference to confirm
+    live: `__TABLES__` is a legacy surface, readable from standard SQL.)
+    """
+
+    pairs = sorted({_split_dataset_key(key) for key in datasets})
+    selects = [
+        "SELECT\n"
+        "  LOWER(CONCAT(project_id, '.', dataset_id, '.', table_id)) AS relation_key,\n"
+        "  TIMESTAMP_MILLIS(last_modified_time) AS last_modified\n"
+        f"FROM `{project}`.`{dataset}`.__TABLES__"
+        for project, dataset in pairs
+    ]
+    return "\nUNION ALL\n".join(selects)
+
+
+def _split_dataset_key(key: str) -> tuple[str, str]:
+    """Split a `project.dataset` key, validating both parts against injection."""
+
+    project, _, dataset = key.partition(".")
+    if not _PROJECT_RE.match(project):
+        raise ValueError(f"invalid GCP project id: {project!r}")
+    if not _DATASET_RE.match(dataset):
+        raise ValueError(f"invalid BigQuery dataset name: {dataset!r}")
+    return project, dataset
+
+
 def parse_query_text_rows(rows: Iterable[Mapping[str, Any]]) -> list[str]:
     """Parse query-text rows into a list of SQL strings."""
 
@@ -165,6 +197,12 @@ def parse_first_seen_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, dateti
     """Parse first-seen rows into a relation_key -> earliest job timestamp map."""
 
     return {str(row["relation_key"]).lower(): row["first_seen"] for row in rows}
+
+
+def parse_last_modified_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, datetime]:
+    """Parse last-modified rows into a relation_key -> last data change map."""
+
+    return {str(row["relation_key"]).lower(): row["last_modified"] for row in rows}
 
 
 def parse_usage_rows(rows: Iterable[Mapping[str, Any]]) -> list[UsageRow]:

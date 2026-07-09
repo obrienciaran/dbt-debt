@@ -13,8 +13,11 @@ from dbt_debt.report.scorecard import (
     DeadColumn,
     DeadModel,
     OrphanReport,
+    PhantomColumn,
     RarelyUsedModel,
     Scorecard,
+    StaleSource,
+    UnusedSource,
 )
 
 CARD = Scorecard(
@@ -372,3 +375,89 @@ def test_detail_lists_both_dead_models_and_columns_in_column_mode() -> None:
     assert "    - amount" in out
     # Models come before columns in the breakdown.
     assert out.index("Unused models (1):") < out.index("Unused columns (1):")
+
+
+def test_render_text_lists_unused_sources_with_query_evidence() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=1,
+        unused_models=0,
+        unused_sources=(
+            UnusedSource(
+                unique_id="source.p.raw.events",
+                name="raw.events",
+                relation_key="db.raw.events",
+                query_count=3,
+                last_queried="2026-06-01T00:00:00+00:00",
+                file_path="models/staging/sources.yml",
+            ),
+            UnusedSource(
+                unique_id="source.p.raw.legacy",
+                name="raw.legacy",
+                relation_key="db.raw.legacy",
+                query_count=0,
+            ),
+        ),
+    )
+    text = render_text(card)
+    assert "Sources:" in text
+    assert "✗ 2 declared sources nothing in the project reads" in text
+
+    detail = render_text(card, detail=True)
+    assert "Declared sources nothing in the project reads (2):" in detail
+    assert (
+        "  - raw.events  (queried directly: 3 queries, last 2026-06-01)"
+        "  models/staging/sources.yml" in detail
+    )
+    assert "  - raw.legacy  (no queries seen)" in detail
+
+
+def test_render_text_lists_stale_sources_and_docs_drift() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=1,
+        unused_models=0,
+        stale_sources=(
+            StaleSource(
+                unique_id="source.p.raw.events",
+                name="raw.events",
+                relation_key="db.raw.events",
+                last_modified="2026-05-01T00:00:00+00:00",
+                file_path="models/staging/sources.yml",
+            ),
+        ),
+        stale_days=30,
+        stale_checked=True,
+        phantom_columns=(
+            PhantomColumn("model.p.m", "m", "legacy_score", "models/m.sql"),
+            PhantomColumn("model.p.m", "m", "old_flag", "models/m.sql"),
+        ),
+    )
+    text = render_text(card)
+    assert "! 1 source stale (no new data in 30+ days)" in text
+    assert "Docs drift:" in text
+    assert "! 2 documented columns no longer exist in the table" in text
+
+    detail = render_text(card, detail=True)
+    assert "Stale sources (no new data in 30+ days; 1):" in detail
+    assert "  - raw.events  (last data 2026-05-01)  models/staging/sources.yml" in detail
+    assert "Documented columns missing from the table (2):" in detail
+    assert "  m  models/m.sql" in detail
+    assert "    - legacy_score" in detail
+    assert "dbt docs generate" in detail
+
+
+def test_render_text_lists_dead_exposures_separately_from_affected() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=0,
+        unused_models=2,
+        dead_exposures=(AffectedConsumer("exposure", "orders_dashboard", "e1"),),
+    )
+    text = render_text(card)
+    assert "! 1 exposure fed only by unused models (likely dead)" in text
+    assert "      - orders_dashboard" in text
+    assert "affected (review before removing)" not in text

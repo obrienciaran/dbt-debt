@@ -25,6 +25,8 @@ class FakeWarehouseClient:
         existing: Iterable[WarehouseRelation] = (),
         orphans_permitted: bool = True,
         first_seen: Mapping[str, datetime] | None = None,
+        last_modified: Mapping[str, datetime] | None = None,
+        freshness_permitted: bool = True,
     ) -> None:
         self._usage = list(usage)
         self._query_texts = list(query_texts)
@@ -32,6 +34,8 @@ class FakeWarehouseClient:
         self._existing = list(existing)
         self._orphans_permitted = orphans_permitted
         self._first_seen = dict(first_seen or {})
+        self._last_modified = dict(last_modified or {})
+        self._freshness_permitted = freshness_permitted
         self.calls: Counter[str] = Counter()
 
     def assert_usage_permission(self) -> None:
@@ -59,3 +63,16 @@ class FakeWarehouseClient:
             raise MissingPermissionError("fake: cannot read managed-dataset table metadata")
         wanted = {dataset.lower() for dataset in datasets}
         return [r for r in self._existing if r.relation_key.split(".")[1] in wanted]
+
+    def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
+        self.calls["source_last_modified"] += 1
+        if not datasets:
+            return {}
+        if not self._freshness_permitted:
+            raise MissingPermissionError("fake: cannot read source-dataset table metadata")
+        wanted = {dataset.lower() for dataset in datasets}
+        return {
+            key: value
+            for key, value in self._last_modified.items()
+            if key.rsplit(".", 1)[0] in wanted
+        }

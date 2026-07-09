@@ -3,7 +3,8 @@
 `CachingWarehouseClient` is a decorator implementing the `WarehouseClient` Protocol, so it
 composes with any real client and is exercised by the same `FakeWarehouseClient` in tests. It
 memoizes the slow warehouse round-trips (`table_usage`, `query_texts`, `relation_first_seen`,
-`existing_relations`) to JSON files keyed by the query parameters — never the manifest, which
+`existing_relations`, `source_last_modified`) to JSON files keyed by the query parameters —
+never the manifest, which
 warehouse results don't depend on. The permission preflight is delegated, never cached, because
 permissions can change and the check is load-bearing.
 
@@ -151,6 +152,16 @@ class CachingWarehouseClient:
             lambda: self._inner.existing_relations(datasets),
             _relations_to_json,
             _relations_from_json,
+        )
+
+    def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
+        extra = {"datasets": sorted(datasets)}
+        return self._cached(
+            "source_last_modified",
+            extra,
+            lambda: self._inner.source_last_modified(datasets),
+            _first_seen_to_json,
+            _first_seen_from_json,
         )
 
     def _path(self, method: str, extra: Mapping[str, object]) -> Path:

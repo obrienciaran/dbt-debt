@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from dbt_debt.artifacts.graph import Graph
 from dbt_debt.artifacts.manifest import load_manifest
@@ -17,6 +20,8 @@ FIXTURE = Path(__file__).parent / "fixtures" / "manifest.json"
 STG_KEY = "my-gcp-project.jaffle_shop.stg_orders"
 FCT_KEY = "my-gcp-project.jaffle_shop.fct_orders"
 SEED_KEY = "my-gcp-project.jaffle_shop.country_codes"
+SOURCE_ID = "source.jaffle_shop.raw.orders"
+SOURCE_KEY = "my-gcp-project.raw.orders"
 TEST_ID = "test.jaffle_shop.not_null_fct_orders_order_id.a1b2c3"
 EXPOSURE_ID = "exposure.jaffle_shop.orders_dashboard"
 
@@ -36,8 +41,10 @@ def test_all_dead_yields_removable_tests_and_affected_exposure() -> None:
     assert card.reclaimable_bytes == 3584
     assert card.removable_tests == (TEST_ID,)
     assert card.unaffected_exposures == ()
-    # Affected exposures carry their name so the report can say which dashboard is at risk.
-    assert [(e.kind, e.name, e.unique_id) for e in card.affected_exposures] == [
+    # Every model the dashboard reads is dead, so it lands in the likely-dead bucket (with
+    # its name, so the report can say which dashboard) rather than the affected list.
+    assert card.affected_exposures == ()
+    assert [(e.kind, e.name, e.unique_id) for e in card.dead_exposures] == [
         ("exposure", "orders_dashboard", EXPOSURE_ID)
     ]
     # Ranked by reclaimable bytes, descending, with the seed tagged by kind.
@@ -241,3 +248,115 @@ def test_emit_writes_report_to_file_when_output_given(tmp_path: Path) -> None:
     out = tmp_path / "debt.json"
     _emit('{"unused_models": 2}', str(out))
     assert out.read_text() == '{"unused_models": 2}\n'
+
+
+def test_unused_declared_source_carries_direct_query_evidence() -> None:
+    # The fixture source is read by nothing, so it is always reported; a usage row on its
+    # relation key shows up as direct-query evidence, never as a revival.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    last = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    usage = [
+        UsageRow(relation_key=FCT_KEY, query_count=4),
+        UsageRow(relation_key=SOURCE_KEY, query_count=2, last_queried=last),
+    ]
+    card = build_scorecard(manifest, graph, usage, {}, _config())
+
+    [source] = card.unused_sources
+    assert source.unique_id == SOURCE_ID
+    assert source.name == "raw.orders"
+    assert source.relation_key == SOURCE_KEY
+    assert (source.query_count, source.last_queried) == (2, last.isoformat())
+    assert source.file_path == "models/staging/sources.yml"
+
+
+def test_unused_declared_source_without_queries_reports_zero() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    card = build_scorecard(manifest, graph, [], {}, _config())
+
+    [source] = card.unused_sources
+    assert (source.query_count, source.last_queried) == (0, None)
+
+
+def test_stale_source_is_reported_with_its_last_data_date() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 9, tzinfo=timezone.utc)
+    modified = now - timedelta(days=40)
+    card = build_scorecard(
+        manifest, graph, [], {}, _config(), last_modified={SOURCE_KEY: modified}, now=now
+    )
+
+    assert card.stale_checked is True
+    assert card.stale_days == 30
+    [stale] = card.stale_sources
+    assert (stale.unique_id, stale.name, stale.relation_key) == (
+        SOURCE_ID,
+        "raw.orders",
+        SOURCE_KEY,
+    )
+    assert stale.last_modified == modified.isoformat()
+    assert stale.file_path == "models/staging/sources.yml"
+
+
+def test_fresh_source_is_not_stale_and_disabled_check_is_unchecked() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 9, tzinfo=timezone.utc)
+    fresh = {SOURCE_KEY: now - timedelta(days=1)}
+
+    card = build_scorecard(manifest, graph, [], {}, _config(), last_modified=fresh, now=now)
+    assert card.stale_checked is True
+    assert card.stale_sources == ()
+
+    disabled = Config(
+        project_dir=FIXTURE.parent.parent,
+        target_path=FIXTURE.parent.name,
+        stale_source_days=0,
+    )
+    card = build_scorecard(manifest, graph, [], {}, disabled, last_modified=fresh, now=now)
+    assert card.stale_checked is False
+    assert card.stale_sources == ()
+
+
+def test_missing_freshness_metadata_reads_as_unchecked() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    card = build_scorecard(manifest, graph, [], {}, _config())
+    assert card.stale_checked is False
+    assert card.stale_sources == ()
+
+
+def test_phantom_columns_come_from_the_catalog_comparison() -> None:
+    # fct_orders declares order_id and amount; the catalog only has order_id, so amount is
+    # stale documentation. stg_orders is absent from the catalog and therefore skipped.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    catalog_columns = {"model.jaffle_shop.fct_orders": ("order_id",)}
+    card = build_scorecard(manifest, graph, [], {}, _config(), catalog_columns=catalog_columns)
+
+    [phantom] = card.phantom_columns
+    assert (phantom.model_name, phantom.column) == ("fct_orders", "amount")
+
+    clean = {"model.jaffle_shop.fct_orders": ("order_id", "amount")}
+    card = build_scorecard(manifest, graph, [], {}, _config(), catalog_columns=clean)
+    assert card.phantom_columns == ()
+
+
+def test_scan_passes_source_freshness_through_and_degrades_cleanly(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    now = datetime.now(timezone.utc)
+    usage = [UsageRow(relation_key=FCT_KEY, query_count=1)]
+    client = FakeWarehouseClient(usage=usage, last_modified={SOURCE_KEY: now - timedelta(days=90)})
+    card = _scan(_config(), client)
+    assert client.calls["source_last_modified"] == 1
+    assert card.stale_checked is True
+    assert [s.name for s in card.stale_sources] == ["raw.orders"]
+
+    denied = FakeWarehouseClient(usage=usage, freshness_permitted=False)
+    card = _scan(_config(), denied)
+    assert card.stale_checked is False
+    assert card.stale_sources == ()
+    assert "source" in capsys.readouterr().err

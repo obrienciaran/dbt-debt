@@ -12,8 +12,11 @@ from dbt_debt.report.scorecard import (
     DeadColumn,
     DeadModel,
     OrphanReport,
+    PhantomColumn,
     RarelyUsedModel,
     Scorecard,
+    StaleSource,
+    UnusedSource,
 )
 from dbt_debt.verdict.coverage import Coverage
 
@@ -74,6 +77,25 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
             f"  ✓ {columns.active} active",
             f"  ✗ {columns.unused} unused",
         ]
+    if scorecard.unused_sources or scorecard.stale_sources:
+        lines.append("Sources:")
+        if scorecard.unused_sources:
+            lines.append(
+                f"  ✗ {_plural(len(scorecard.unused_sources), 'declared source')} "
+                "nothing in the project reads"
+            )
+        if scorecard.stale_sources:
+            lines.append(
+                f"  ! {_plural(len(scorecard.stale_sources), 'source')} stale "
+                f"(no new data in {scorecard.stale_days}+ days)"
+            )
+    if scorecard.phantom_columns:
+        count = len(scorecard.phantom_columns)
+        verb = "exists" if count == 1 else "exist"
+        lines += [
+            "Docs drift:",
+            f"  ! {_plural(count, 'documented column')} no longer {verb} in the table",
+        ]
     if scorecard.orphans is not None:
         lines += _orphan_summary_lines(scorecard.orphans)
     if scorecard.coverage is not None:
@@ -86,6 +108,12 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
     if columns is not None:
         lines.append(f"  - {_plural(columns.removable, 'column')} removable")
     lines.append(f"  - {_plural(len(scorecard.removable_tests), 'test')} removable")
+    if scorecard.dead_exposures:
+        lines.append(
+            f"  ! {_plural(len(scorecard.dead_exposures), 'exposure')} fed only by unused "
+            "models (likely dead)"
+        )
+        lines += [f"      - {e.name}" for e in scorecard.dead_exposures]
     if scorecard.affected_exposures:
         lines.append(
             f"  ! {_plural(len(scorecard.affected_exposures), 'exposure')} affected "
@@ -182,8 +210,65 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
     columns = scorecard.columns
     if columns is not None:
         lines += _detail_columns(columns.dead_columns)
+    if scorecard.unused_sources:
+        lines += _detail_unused_sources(scorecard.unused_sources)
+    if scorecard.stale_sources:
+        lines += _detail_stale_sources(scorecard.stale_sources, scorecard.stale_days)
+    if scorecard.phantom_columns:
+        lines += _detail_phantom_columns(scorecard.phantom_columns)
     if scorecard.orphans is not None:
         lines += _detail_orphans(scorecard.orphans)
+    return lines
+
+
+def _detail_stale_sources(sources: tuple[StaleSource, ...], stale_days: int) -> list[str]:
+    """Each stale source with its last data change and file path, stalest first."""
+
+    lines = ["", f"Stale sources (no new data in {stale_days}+ days; {len(sources)}):"]
+    for source in sources:
+        path = f"  {source.file_path}" if source.file_path else ""
+        lines.append(f"  - {source.name}  (last data {source.last_modified[:10]}){path}")
+    return lines
+
+
+def _detail_phantom_columns(columns: tuple[PhantomColumn, ...]) -> list[str]:
+    """Declared-but-missing columns grouped by model, with the YAML to fix.
+
+    Compared against catalog.json, so a stale catalog can false-positive; the closing note
+    says how to refresh it.
+    """
+
+    groups: dict[str, list[PhantomColumn]] = {}
+    for column in columns:
+        groups.setdefault(column.model_name, []).append(column)
+    lines = ["", f"Documented columns missing from the table ({len(columns)}):"]
+    for model_name, model_columns in groups.items():
+        path = model_columns[0].file_path
+        lines.append(f"  {model_name}" + (f"  {path}" if path else ""))
+        lines += [f"    - {column.column}" for column in model_columns]
+    lines.append("  (compared against catalog.json; run `dbt docs generate` if it is stale)")
+    return lines
+
+
+def _detail_unused_sources(sources: tuple[UnusedSource, ...]) -> list[str]:
+    """Each unused source with its file path and any direct-query evidence.
+
+    A queried entry means people read the raw table without going through dbt (consider
+    modelling it); an unqueried one is a dead declaration in sources.yml.
+    """
+
+    lines = ["", f"Declared sources nothing in the project reads ({len(sources)}):"]
+    for source in sources:
+        if source.query_count:
+            count = source.query_count
+            evidence = [f"{count} query" if count == 1 else f"{count} queries"]
+            if source.last_queried:
+                evidence.append(f"last {source.last_queried[:10]}")
+            usage = f"  (queried directly: {', '.join(evidence)})"
+        else:
+            usage = "  (no queries seen)"
+        path = f"  {source.file_path}" if source.file_path else ""
+        lines.append(f"  - {source.name}{usage}{path}")
     return lines
 
 

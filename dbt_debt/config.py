@@ -42,6 +42,8 @@ class Config:
     min_age_days: int = 7
     rare_threshold: int = 5
     """Queried models with at most this many queries in the window are "rarely used"; 0 disables."""
+    stale_source_days: int = 30
+    """Declared sources with no new data for more than this many days are stale; 0 disables."""
     output_format: str = "text"
     top_n: int = 10
     cache: bool = True

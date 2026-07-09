@@ -15,17 +15,27 @@ from dbt_debt.artifacts.catalog import Catalog
 from dbt_debt.artifacts.graph import Graph
 from dbt_debt.config import Config
 from dbt_debt.consumption.usage import first_seen_model_ids, model_usage, queried_model_ids
-from dbt_debt.domain import ColumnEdge, ColumnRef, Manifest, UsageRow, WarehouseRelation
+from dbt_debt.domain import (
+    ColumnEdge,
+    ColumnRef,
+    Manifest,
+    Relation,
+    UsageRow,
+    WarehouseRelation,
+)
 from dbt_debt.verdict.blockers import analyze_columns
 from dbt_debt.verdict.columns import dead_columns
 from dbt_debt.verdict.coverage import Coverage, coverage
-from dbt_debt.verdict.exposures import affected_exposures, unaffected_exposures
+from dbt_debt.verdict.drift import phantom_columns
+from dbt_debt.verdict.exposures import affected_exposures, dead_exposures, unaffected_exposures
 from dbt_debt.verdict.freshness import too_new_models
 from dbt_debt.verdict.models import dead_models
 from dbt_debt.verdict.orphans import orphaned_relations, undeclared_sources
 from dbt_debt.verdict.partitioning import unpartitioned_large_tables
 from dbt_debt.verdict.rarity import rarely_used_models
 from dbt_debt.verdict.semantic import affected_semantic_consumers
+from dbt_debt.verdict.sources import unused_sources
+from dbt_debt.verdict.staleness import stale_sources
 from dbt_debt.verdict.tests import removable_tests
 
 
@@ -76,6 +86,54 @@ class RarelyUsedModel:
     total_bytes: int
     file_path: str | None = None
     resource_type: str = "model"
+
+
+@dataclass(frozen=True)
+class UnusedSource:
+    """A declared source nothing in the project reads, with any direct-query evidence.
+
+    `query_count` / `last_queried` come from the same usage rows the model verdicts join:
+    a non-zero count means people query the raw table directly (worth modelling, not just
+    deleting the declaration), zero means the declaration is dead weight in sources.yml.
+    `last_queried` is an ISO-8601 string so the scorecard serializes to JSON unchanged.
+    """
+
+    unique_id: str
+    name: str
+    relation_key: str
+    query_count: int
+    last_queried: str | None = None
+    file_path: str | None = None
+
+
+@dataclass(frozen=True)
+class StaleSource:
+    """A declared source whose table has received no new data past the staleness threshold.
+
+    `last_modified` is an ISO-8601 string (like `RarelyUsedModel.last_queried`) so the
+    scorecard serializes to JSON unchanged. A review list: the loader upstream of dbt has
+    likely stopped, which no unused figure captures.
+    """
+
+    unique_id: str
+    name: str
+    relation_key: str
+    last_modified: str
+    file_path: str | None = None
+
+
+@dataclass(frozen=True)
+class PhantomColumn:
+    """A column declared in a model's YAML that no longer exists in the built relation.
+
+    Stale documentation to delete; compared against catalog.json, so a stale catalog can
+    false-positive (regenerate docs first).
+    """
+
+    unique_id: str
+    model_name: str
+    column: str
+    file_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +212,8 @@ class Scorecard:
     removable_tests: tuple[str, ...] = ()
     unaffected_exposures: tuple[str, ...] = ()
     affected_exposures: tuple[AffectedConsumer, ...] = ()
+    dead_exposures: tuple[AffectedConsumer, ...] = ()
+    """Exposures whose every model dependency is dead — the consumer itself is likely dead."""
     affected_semantic: tuple[AffectedConsumer, ...] = ()
     dead_models: tuple[DeadModel, ...] = field(default_factory=tuple)
     too_new_models: tuple[DeadModel, ...] = ()
@@ -166,6 +226,15 @@ class Scorecard:
     """Test/docs coverage counts; None only on handcrafted scorecards (assembly always sets it)."""
     unpartitioned_tables: tuple[UnpartitionedTable, ...] = ()
     """BigQuery only: large tables declaring neither partition_by nor cluster_by."""
+    unused_sources: tuple[UnusedSource, ...] = ()
+    """Declared sources nothing in the project reads; a review list, never counted unused."""
+    stale_sources: tuple[StaleSource, ...] = ()
+    """Declared sources with no new data past the threshold; a review list."""
+    stale_days: int = 0
+    stale_checked: bool = False
+    """False when the check is disabled or the source metadata could not be read."""
+    phantom_columns: tuple[PhantomColumn, ...] = ()
+    """YAML-declared columns missing from the built relation, per catalog.json."""
     columns: ColumnReport | None = None
     orphans: OrphanReport | None = None
 
@@ -187,6 +256,7 @@ def build_scorecard(
     first_seen: Mapping[str, datetime] | None = None,
     now: datetime | None = None,
     catalog_columns: Mapping[str, Sequence[str]] | None = None,
+    last_modified: Mapping[str, datetime] | None = None,
 ) -> Scorecard:
     """Combine usage, DAG propagation, and manifest traversals into a `Scorecard`.
 
@@ -242,6 +312,57 @@ def build_scorecard(
         ranked = sorted(uids, key=lambda uid: (-_model_bytes(manifest, storage_bytes, uid), uid))
         return tuple(rarely_used_entry(uid) for uid in ranked)
 
+    # Unused declared sources are a manifest verdict; the usage rows (already fetched for the
+    # model verdicts) attach any direct-query evidence so the report can tell "dead weight in
+    # sources.yml" apart from "raw table people query directly".
+    usage_by_key = {row.relation_key: row for row in usage_rows}
+
+    def unused_source_entry(relation: Relation) -> UnusedSource:
+        row = usage_by_key.get(relation.relation_key)
+        return UnusedSource(
+            unique_id=relation.unique_id,
+            name=relation.name,
+            relation_key=relation.relation_key,
+            query_count=row.query_count if row else 0,
+            last_queried=row.last_queried.isoformat() if row and row.last_queried else None,
+            file_path=relation.original_file_path,
+        )
+
+    unused_source_entries = tuple(unused_source_entry(r) for r in unused_sources(manifest))
+
+    # The stale-source check runs only when it is enabled and the metadata was readable;
+    # `last_modified` is None in every other case (disabled, no sources, missing grant).
+    stale_entries: tuple[StaleSource, ...] = ()
+    stale_checked = False
+    if last_modified is not None and config.stale_source_days > 0:
+        stale_checked = True
+        stale_entries = tuple(
+            StaleSource(
+                unique_id=relation.unique_id,
+                name=relation.name,
+                relation_key=relation.relation_key,
+                last_modified=modified.isoformat(),
+                file_path=relation.original_file_path,
+            )
+            for relation, modified in stale_sources(
+                manifest.relations.values(),
+                last_modified,
+                now_utc,
+                timedelta(days=config.stale_source_days),
+            )
+        )
+
+    # Documentation drift is catalog-only: without catalog columns nothing can be compared.
+    phantom_entries = tuple(
+        PhantomColumn(
+            unique_id=uid,
+            model_name=manifest.models[uid].name,
+            column=column,
+            file_path=manifest.models[uid].original_file_path,
+        )
+        for uid, column in phantom_columns(manifest.models, catalog_columns or {})
+    )
+
     # The partitioning check is BigQuery-specific: Snowflake micro-partitions automatically and
     # its explicit clustering keys are optional tuning, not debt.
     unpartitioned: tuple[UnpartitionedTable, ...] = ()
@@ -285,6 +406,10 @@ def build_scorecard(
             AffectedConsumer(kind="exposure", name=e.name, unique_id=e.unique_id)
             for e in affected_exposures(manifest, dead)
         ),
+        dead_exposures=tuple(
+            AffectedConsumer(kind="exposure", name=e.name, unique_id=e.unique_id)
+            for e in dead_exposures(manifest, dead)
+        ),
         affected_semantic=tuple(
             AffectedConsumer(kind=c.kind, name=c.name, unique_id=c.unique_id)
             for c in affected_semantic_consumers(manifest, dead)
@@ -296,6 +421,11 @@ def build_scorecard(
         reclaimable_bytes=reclaimable,
         coverage=coverage(manifest, catalog_columns),
         unpartitioned_tables=unpartitioned,
+        unused_sources=unused_source_entries,
+        stale_sources=stale_entries,
+        stale_days=config.stale_source_days,
+        stale_checked=stale_checked,
+        phantom_columns=phantom_entries,
         columns=column_report,
         orphans=orphan_report,
     )

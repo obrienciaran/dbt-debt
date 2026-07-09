@@ -69,3 +69,12 @@ class WarehouseClient(Protocol):
         returns an empty list when `datasets` is empty.
         """
         ...
+
+    def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
+        """relation_key -> when the table last received data, for the stale-source check.
+
+        `datasets` are `database.schema` keys of the declared sources. Raises
+        `MissingPermissionError` when the metadata cannot be read (on BigQuery this needs
+        read access to the source datasets); returns an empty dict when `datasets` is empty.
+        """
+        ...

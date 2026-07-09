@@ -91,6 +91,22 @@ class RealBigQueryClient:
             ) from exc
         return jobs.parse_relation_rows(rows)
 
+    def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
+        if not datasets:
+            return {}
+        from google.api_core.exceptions import Forbidden
+
+        sql = jobs.source_last_modified_query(datasets)
+        try:
+            rows = self._run(sql, "source freshness")
+        except Forbidden as exc:
+            raise MissingPermissionError(
+                "Cannot read table metadata for the source datasets (need read access, e.g. "
+                "roles/bigquery.metadataViewer or dataViewer on them). The stale-source check "
+                "is skipped; the rest of the scan is unaffected."
+            ) from exc
+        return jobs.parse_last_modified_rows(rows)
+
     def _run(self, sql: str, stage: str) -> Iterator[Any]:
         """Run one query, translating any API failure into a readable `WarehouseError`.
 

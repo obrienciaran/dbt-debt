@@ -122,6 +122,34 @@ GROUP BY relation_key
 """.strip()
 
 
+def source_last_modified_query(datasets: Iterable[str]) -> str:
+    """When each table in `datasets` (each a `database.schema`) last changed.
+
+    Reads `ACCOUNT_USAGE.TABLES` (already required for first-seen, so no new grant), taking
+    `MAX(last_altered)` over the live rows per relation. Documented caveat: `last_altered`
+    also moves on DDL, so a table can look fresher than its data — the check under-reports
+    staleness, never over-reports use. Comparison is on lowercased `database.schema` keys,
+    matching the relation_key normalization; each identifier is validated against injection.
+    """
+
+    keys = sorted({key.lower() for key in datasets})
+    for key in keys:
+        database, _, schema = key.partition(".")
+        for part in (database, schema):
+            if not _IDENTIFIER_RE.match(part):
+                raise ValueError(f"invalid Snowflake identifier: {part!r}")
+    dataset_list = ", ".join(f"'{key}'" for key in keys)
+    return f"""
+SELECT
+  LOWER(table_catalog || '.' || table_schema || '.' || table_name) AS relation_key,
+  MAX(last_altered) AS last_modified
+FROM {_TABLES}
+WHERE deleted IS NULL
+  AND LOWER(table_catalog || '.' || table_schema) IN ({dataset_list})
+GROUP BY relation_key
+""".strip()
+
+
 def existing_relations_query(database: str, schemas: Iterable[str]) -> str:
     """All tables and views in `database` limited to `schemas`, for orphan discovery.
 

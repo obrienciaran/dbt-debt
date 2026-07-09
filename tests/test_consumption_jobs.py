@@ -12,6 +12,8 @@ from dbt_debt.consumption.jobs import (
     existing_relations_query,
     first_seen_query,
     parse_first_seen_rows,
+    parse_last_modified_rows,
+    source_last_modified_query,
     parse_query_text_rows,
     parse_relation_rows,
     parse_usage_rows,
@@ -118,3 +120,24 @@ def test_parse_relation_rows() -> None:
     parsed = parse_relation_rows([{"relation_key": "P.D.T", "table_type": "BASE TABLE"}])
     assert parsed[0].relation_key == "p.d.t"
     assert parsed[0].relation_type == "BASE TABLE"
+
+
+def test_source_last_modified_query_unions_the_datasets() -> None:
+    sql = source_last_modified_query({"proj-a.raw", "proj-b.landing_zone"})
+    assert "FROM `proj-a`.`raw`.__TABLES__" in sql
+    assert "FROM `proj-b`.`landing_zone`.__TABLES__" in sql
+    assert "TIMESTAMP_MILLIS(last_modified_time) AS last_modified" in sql
+    assert sql.count("UNION ALL") == 1
+
+
+def test_source_last_modified_query_validates_identifiers() -> None:
+    with pytest.raises(ValueError):
+        source_last_modified_query({"bad;proj.raw"})
+    with pytest.raises(ValueError):
+        source_last_modified_query({"proj.bad-dataset"})
+
+
+def test_parse_last_modified_rows_lowercases_keys() -> None:
+    when = datetime(2026, 6, 1)
+    rows = [{"relation_key": "P.RAW.Orders", "last_modified": when}]
+    assert parse_last_modified_rows(rows) == {"p.raw.orders": when}

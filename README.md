@@ -23,6 +23,11 @@ Models:
 Columns:
   ✓ 4382 active
   ✗ 3 unused
+Sources:
+  ✗ 1 declared source nothing in the project reads
+  ! 1 source stale (no new data in 30+ days)
+Docs drift:
+  ! 2 documented columns no longer exist in the table
 Orphans:
   ✗ 4 tables in managed datasets with no dbt model
   ! 2 sources found but not declared in the manifest
@@ -34,6 +39,8 @@ Coverage:
 Potential savings:
   - 3 columns removable
   - 2 tests removable
+  ! 1 exposure fed only by unused models (likely dead)
+      - legacy_kpi_dashboard
   ! 1 exposure affected (review before removing)
       - weekly_revenue_dashboard
   ! 1 semantic-layer consumer affected (review before removing)
@@ -77,6 +84,9 @@ up to 365 there.
   team has written into the dbt project. An unused model that feeds one is flagged "affected" so you
   check before removing it, and don't pull out something still feeding a dashboard. Exposures whose
   models are all active aren't listed.
+- **exposures that are likely dead.** When *every* model an exposure reads is unused, nothing the
+  dashboard shows was queried in the whole window, so the dashboard itself is probably dead.
+  These are listed by name, separately from the merely affected ones, as candidates to retire.
 - **semantic-layer consumers affected.** If your project declares semantic models, metrics, or saved
   queries (dbt's semantic layer), an unused model that feeds one (even through a chain of metrics)
   is flagged for review the same way, and a column a semantic model names is never counted as
@@ -88,6 +98,21 @@ up to 365 there.
 - **tables your models read but dbt was never told about.** A model reads from a table you never
   declared. These need to be added as a `source()`. dbt-debt finds these by reading the model's SQL,
   so it needs no extra warehouse permission and shows up even if it can't list the warehouse tables.
+- **sources declared but never read.** The reverse case. A source sits in a `sources.yml` but no
+  model, exposure, or semantic-layer consumer references it. Each one is listed with its file path
+  and any queries people ran against the raw table directly, so you can tell a dead declaration
+  (delete the entry) from a table your team reads outside dbt (consider modelling it). A test on
+  the source doesn't count as use, since a test guards data without consuming it. This is a review
+  list and never feeds the unused-model figures.
+- **stale sources.** A declared source whose table has received no new data for more than 30 days
+  (`--stale-source-days`; `0` turns the check off) usually means the loader upstream of dbt has
+  stopped. The last-data date is read from warehouse metadata: on BigQuery it needs read access
+  to the source datasets (skipped with a warning without it), on Snowflake no extra grant. Each
+  stale source is listed with the date its data last changed. On Snowflake that date can also
+  move on DDL changes, so a stale table can occasionally look fresher than its data.
+- **documentation drift.** A column declared in a model's YAML that no longer exists in the built
+  table (per `catalog.json`) is stale documentation to delete. Compared against the catalog, so
+  rerun `dbt docs generate` first if it's old.
 - **coverage.** Three hygiene sentences: how many models have at least one test, how many have a
   description, and how many columns do. The column figure counts the real columns from
   `catalog.json` when it's present (and says so), else the ones declared in YAML.

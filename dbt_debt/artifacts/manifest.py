@@ -152,10 +152,15 @@ def _parse_relation(unique_id: str, node: dict[str, Any]) -> Relation:
     database = node.get("database")
     schema = node.get("schema")
     identifier = node.get("identifier") or node.get("name")
+    table_name = node.get("name", "")
+    source_name = node.get("source_name")
     return Relation(
         unique_id=unique_id,
         relation_key=relation_key(database, schema, identifier),
         schema=schema,
+        name=f"{source_name}.{table_name}" if source_name else table_name,
+        original_file_path=node.get("original_file_path"),
+        database=database,
     )
 
 

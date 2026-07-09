@@ -16,6 +16,7 @@ from dbt_debt.consumption.snowflake_queries import (
     first_seen_query,
     permission_probe_query,
     query_text_query,
+    source_last_modified_query,
     table_usage_query,
 )
 
@@ -84,3 +85,19 @@ def test_exclusion_clause_uses_dollar_quoting_and_regexp_count() -> None:
 def test_exclusion_clause_rejects_patterns_that_break_dollar_quoting() -> None:
     with pytest.raises(ValueError):
         exclusion_clause("bad$$pattern")
+
+
+def test_source_last_modified_query_reads_account_usage_tables() -> None:
+    sql = source_last_modified_query({"DB.RAW", "db.landing"})
+    assert "FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES" in sql
+    assert "MAX(last_altered) AS last_modified" in sql
+    assert "deleted IS NULL" in sql
+    # Keys are lowercased and deduplicated for the IN filter.
+    assert "IN ('db.landing', 'db.raw')" in sql
+
+
+def test_source_last_modified_query_validates_identifiers() -> None:
+    with pytest.raises(ValueError):
+        source_last_modified_query({"db.bad-schema"})
+    with pytest.raises(ValueError):
+        source_last_modified_query({"bad db.raw"})

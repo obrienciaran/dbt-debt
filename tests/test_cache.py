@@ -217,3 +217,17 @@ def _backdate(path: Path, *, hours: float) -> None:
     entry = json.loads(path.read_text())
     entry["created"] = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     path.write_text(json.dumps(entry))
+
+
+def test_source_last_modified_is_cached_and_keyed_on_the_datasets(tmp_path: Path) -> None:
+    when = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    inner = FakeWarehouseClient(last_modified={"db.raw.events": when})
+    client = _client(inner, tmp_path)
+
+    first = client.source_last_modified({"db.raw"})
+    second = client.source_last_modified({"db.raw"})
+    assert first == second == {"db.raw.events": when}
+    assert inner.calls["source_last_modified"] == 1
+    # A different dataset set is a different key, so it re-fetches.
+    client.source_last_modified({"db.other"})
+    assert inner.calls["source_last_modified"] == 2

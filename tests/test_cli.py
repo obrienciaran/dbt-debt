@@ -56,6 +56,12 @@ def test_min_age_days_reaches_the_config() -> None:
     assert _config_from_args(_build_parser().parse_args(["scan"])).min_age_days == 7
 
 
+def test_stale_source_days_reaches_the_config() -> None:
+    args = _build_parser().parse_args(["scan", "--stale-source-days", "90"])
+    assert _config_from_args(args).stale_source_days == 90
+    assert _config_from_args(_build_parser().parse_args(["scan"])).stale_source_days == 30
+
+
 def test_min_age_zero_skips_the_first_seen_call() -> None:
     from dbt_debt.cli import _scan
     from dbt_debt.config import Config

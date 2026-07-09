@@ -69,6 +69,10 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
     if config.min_age_days > 0:
         with status("Checking relation ages"):
             first_seen = client.relation_first_seen()
+    last_modified: dict[str, datetime] | None = None
+    if config.stale_source_days > 0 and manifest.relations:
+        with status("Checking source freshness"):
+            last_modified = _source_last_modified(client, manifest)
     catalog_columns = (
         {uid: node.columns for uid, node in catalog.nodes.items()} if catalog else None
     )
@@ -82,6 +86,7 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
         orphan_report,
         first_seen,
         catalog_columns=catalog_columns,
+        last_modified=last_modified,
     )
 
 
@@ -231,6 +236,26 @@ def _existing_relations(
     return existing
 
 
+def _source_last_modified(
+    client: WarehouseClient, manifest: Manifest
+) -> dict[str, datetime] | None:
+    """Last-modified metadata for the source datasets, or None when it can't be read.
+
+    Returns None — the stale-source check is skipped — when the caller lacks read access to
+    the source datasets, with a warning; the rest of the scan is unaffected. Mirrors the
+    orphan path's `_existing_relations` degradation.
+    """
+
+    datasets = manifest.source_datasets()
+    if not datasets:
+        return None
+    try:
+        return client.source_last_modified(datasets)
+    except MissingPermissionError as exc:
+        print(str(exc), file=sys.stderr)
+        return None
+
+
 def _render(scorecard: Scorecard, config: Config, detail: bool) -> str:
     if config.output_format == "json":
         return render_json(scorecard)
@@ -276,6 +301,7 @@ def _config_from_args(args: argparse.Namespace) -> Config:
         columns=args.columns,
         min_age_days=args.min_age_days,
         rare_threshold=args.rare_threshold,
+        stale_source_days=args.stale_source_days,
         output_format=args.format,
         top_n=args.top_n,
         cache=args.cache,
@@ -479,6 +505,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=5,
         help="Queried models with at most this many queries in the window are reported as "
         "rarely used (default: 5; 0 disables the band).",
+    )
+    scan.add_argument(
+        "--stale-source-days",
+        type=int,
+        default=30,
+        help="Declared sources whose table received no new data for more than this many days "
+        "are reported as stale (default: 30; 0 disables the check).",
     )
     scan.add_argument("--format", choices=["text", "json"], default="text")
     scan.add_argument(

@@ -55,8 +55,13 @@ record against the tables actually in the warehouse and flags two kinds of gap:
   outside the DAG and is never tracked or tested. Fix it by declaring it in a `sources.yml` file
   and referencing it with `{{ source() }}`.
 
-Two rules. We only look inside the datasets dbt builds into so raw input tables
-are never flagged, and a table a model reads always counts as undeclared, never as an orphan.
+Two rules:
+
+1. **Where we look.** We only search datasets dbt builds into (where models, seeds, and
+   snapshots land). Datasets that only hold raw data loaded by something else (Fivetran, Airbyte,
+   a manual load) are never searched, so raw input tables are never flagged.
+2. **How we classify what we find.** An unrecognized table inside a dataset within a dbt project
+   is an undeclared source if another dbt model queries it, or an orphan if nothing does.
 
 ## 🎯 What counts as "usage"
 
@@ -161,7 +166,7 @@ key-pair setup is done once:
 
    ```toml
    [default]
-   account = "myorg-myaccount"        # from your account URL, before .snowflakecomputing.com
+   account = "myorg-myaccount"
    user = "MY_USER"
    authenticator = "SNOWFLAKE_JWT"
    private_key_file = "/Users/me/.snowflake/snowflake_key.p8"
@@ -170,7 +175,7 @@ key-pair setup is done once:
    database = "MY_DB"
    ```
 
-   dbt itself can use the same key: set `private_key_path` (instead of `password`) in your
+   dbt itself can use the same key by setting `private_key_path` (instead of `password`) in your
    `profiles.yml`.
 
 **What the scan needs:**

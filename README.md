@@ -49,17 +49,17 @@ Top 3 of 3 unused columns (ranked by table bytes; BigQuery has no per-column siz
 ## 📊 What the numbers mean
 
 A **model** is one of your `.sql` files. A **column** is one field in the table that model builds.
-The **lookback window** is how far back we read the warehouse's query log (180 days by default —
-also the most BigQuery keeps; Snowflake's ACCOUNT_USAGE keeps a year, so `--lookback-days` can go
-up to 365 there).
+The **lookback window** is how far back we read the warehouse's query log. The default is 180
+days, which is also the most BigQuery keeps. Snowflake keeps a year, so `--lookback-days` can go
+up to 365 there.
 
 - **active / unused models.** A model is **unused** if, in the lookback window, nothing queried it
   and nothing queried anything built from it. Everything else is **active**. Seeds and snapshots
   are checked the same way and tagged `(seed)` / `(snapshot)` in the lists.
-- **rarely used models.** A model that *was* queried, but at most 5 times in the whole window
-  (`--rare-threshold`; `0` turns the band off). These are not unused — observed use is use — but
-  each is listed with its query count, last-queried date, and size so an owner can judge whether
-  those few queries still earn its keep. They never feed the removable/reclaimable figures.
+- **rarely used models.** A model that was queried, but at most 5 times in the whole window
+  (`--rare-threshold`; `0` turns the band off). These still count as used. Each is listed with its
+  query count, last-queried date, and size so an owner can judge whether those few queries still
+  earn its keep. They never feed the removable or reclaimable figures.
 - **too new to judge.** A model whose table first appeared in the query log fewer than 7 days ago
   (`--min-age-days`) hasn't had a fair chance to be queried yet, so it's listed separately instead
   of being called unused. This guard only applies to the things dbt builds, i.e. models, seeds,
@@ -68,17 +68,17 @@ up to 365 there).
 - **active / unused columns.** A column is **unused** if no query read it, and nothing read another
   column built from it.
 - **columns you could remove.** Unused columns that nothing in your dbt project still depends on (no
-  data test, no contract). These are suggestions, not an automatic delete — "unused" comes from the
-  query log, which can't see everything (see *What counts as usage*). An unused column that still
-  has a dependency is listed separately and not counted here.
+  data test, no contract). These are suggestions rather than an automatic delete, because "unused"
+  comes from the query log, which can't see everything (see *What counts as usage*). An unused
+  column that still has a dependency is listed separately and not counted here.
 - **tests you could remove.** Data tests attached to a model or column you'd be removing. If the
   thing goes, the test can go with it.
 - **exposures affected.** An **exposure** is a downstream consumer (e.g. a dashboard or report) your
-  team has written into the dbt project. An unused model that feeds one is flagged "affected — check
-  before removing" so you don't pull out something still feeding a dashboard. Exposures whose models
-  are all active aren't listed.
+  team has written into the dbt project. An unused model that feeds one is flagged "affected" so you
+  check before removing it, and don't pull out something still feeding a dashboard. Exposures whose
+  models are all active aren't listed.
 - **semantic-layer consumers affected.** If your project declares semantic models, metrics, or saved
-  queries (dbt's semantic layer), an unused model that feeds one — even through a chain of metrics —
+  queries (dbt's semantic layer), an unused model that feeds one (even through a chain of metrics)
   is flagged for review the same way, and a column a semantic model names is never counted as
   removable.
 - **tables with no dbt model behind them (orphans).** A real table or view in a dataset dbt builds
@@ -86,8 +86,8 @@ up to 365 there).
   by hand. dbt-debt only looks inside the datasets dbt builds into, so any raw input tables are
   never flagged.
 - **tables your models read but dbt was never told about.** A model reads from a table you never
-  declared. These need to be added as a `source()`. dbt-debt finds these by reading the model's SQL, so it needs no
-  extra BigQuery permission and shows up even if it can't list the entire warehouse tables.
+  declared. These need to be added as a `source()`. dbt-debt finds these by reading the model's SQL,
+  so it needs no extra warehouse permission and shows up even if it can't list the warehouse tables.
 - **coverage.** Three hygiene sentences: how many models have at least one test, how many have a
   description, and how many columns do. The column figure counts the real columns from
   `catalog.json` when it's present (and says so), else the ones declared in YAML.
@@ -96,7 +96,7 @@ up to 365 there).
   full scan from every query that touches it. The largest offenders (up to 20) are listed by
   stored size. Skipped on Snowflake, which micro-partitions automatically.
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage you'd
-  reclaim; a single column can't be sized (BigQuery doesn't report storage per column), so columns
+  reclaim. A single column can't be sized (BigQuery doesn't report storage per column), so columns
   rank by their table's size instead.
 
 ## 📦 Installing it
@@ -127,7 +127,7 @@ Export). When you pipe the output, run it in CI, or send it to a script, there i
 | What you run | What you get |
 |---|---|
 | `dbt-debt scan` piped or in CI | a plain summary |
-| `dbt-debt scan --detail` | the full list — every unused table, column, and orphan |
+| `dbt-debt scan --detail` | the full list of unused tables, columns, and orphans |
 | `dbt-debt scan --format json` | JSON (pipe it to `jq`) |
 | `dbt-debt scan --format json -o debt.json` | JSON written to a file |
 | `dbt-debt scan --no-interactive` | plain text, even in a terminal |
@@ -135,8 +135,8 @@ Export). When you pipe the output, run it in CI, or send it to a script, there i
 | `dbt-debt scan --min-age-days 30` | anything first seen in the last 30 days is "too new to judge", not unused (default: 7; `0` turns the guard off) |
 | `dbt-debt scan --rare-threshold 10` | models with at most 10 queries in the window are "rarely used" (default: 5; `0` turns the band off) |
 
-The warehouse is detected from your dbt artifacts (`--warehouse bigquery|snowflake` overrides);
+The warehouse is detected from your dbt artifacts (`--warehouse bigquery|snowflake` overrides).
 Snowflake needs the optional extra, `pip install 'dbt-debt[snowflake]'`.
 
-For the cache, how it works, permissions (BigQuery and Snowflake), full options, and how to work
-on dbt-debt, see [`USAGE.md`](USAGE.md).
+For the cache, how it works, permissions and sign-in (BigQuery and Snowflake), full options, and
+how to work on dbt-debt, see [`USAGE.md`](USAGE.md).

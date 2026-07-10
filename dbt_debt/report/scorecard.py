@@ -35,7 +35,7 @@ from dbt_debt.verdict.models import dead_models
 from dbt_debt.verdict.orphans import orphaned_relations, undeclared_sources
 from dbt_debt.verdict.partitioning import unpartitioned_large_tables
 from dbt_debt.verdict.rarity import rarely_used_models
-from dbt_debt.verdict.semantic import affected_semantic_consumers
+from dbt_debt.verdict.semantic import AffectedSemanticConsumer, affected_semantic_consumers
 from dbt_debt.verdict.sources import unused_sources
 from dbt_debt.verdict.staleness import stale_sources
 from dbt_debt.verdict.tests import removable_tests
@@ -47,12 +47,17 @@ class AffectedConsumer:
 
     Covers exposures and the semantic-layer kinds so the report can say *which* dashboard or
     metric is at risk, not just how many. `kind` is "exposure", "semantic_model", "metric",
-    or "saved_query".
+    or "saved_query". `via_name` / `via_kind` name what makes it affected: the unused model
+    (kind "model", "seed", or "snapshot") for consumers sitting directly on one, or the
+    affected consumer in between for transitive hops. Both are None when the cause is not
+    resolved (exposures today).
     """
 
     kind: str
     name: str
     unique_id: str
+    via_name: str | None = None
+    via_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -278,6 +283,27 @@ class Scorecard:
     orphans: OrphanReport | None = None
 
 
+def _affected_semantic_entry(
+    manifest: Manifest, verdict: AffectedSemanticConsumer
+) -> AffectedConsumer:
+    """Resolve the verdict's `via` unique_id to the name and kind the renderers print."""
+
+    if verdict.via in manifest.models:
+        cause = manifest.models[verdict.via]
+        via_name, via_kind = cause.name, cause.resource_type
+    else:
+        upstream = manifest.semantic_consumers[verdict.via]
+        via_name, via_kind = upstream.name, upstream.kind
+    consumer = verdict.consumer
+    return AffectedConsumer(
+        kind=consumer.kind,
+        name=consumer.name,
+        unique_id=consumer.unique_id,
+        via_name=via_name,
+        via_kind=via_kind,
+    )
+
+
 def _model_bytes(manifest: Manifest, storage_bytes: Mapping[str, int], unique_id: str) -> int:
     """Logical bytes of a model's relation from the catalog-derived map (0 when unknown)."""
 
@@ -487,8 +513,8 @@ def build_scorecard(
             for e in dead_exposures(manifest, dead)
         ),
         affected_semantic=tuple(
-            AffectedConsumer(kind=c.kind, name=c.name, unique_id=c.unique_id)
-            for c in affected_semantic_consumers(manifest, dead)
+            _affected_semantic_entry(manifest, a)
+            for a in affected_semantic_consumers(manifest, dead)
         ),
         dead_models=ranked_assets(dead),
         too_new_models=ranked_assets(too_new),

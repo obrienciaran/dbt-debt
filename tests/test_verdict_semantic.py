@@ -40,13 +40,29 @@ def _chain() -> dict[str, SemanticConsumer]:
 
 
 def test_dead_model_affects_the_whole_semantic_chain() -> None:
-    # semantic model → metric → saved query: impact flows through every hop.
+    # semantic model → metric → saved query: impact flows through every hop, and each result
+    # carries the dependency that condemned it, in discovery order so the chain reads top-down.
     result = affected_semantic_consumers(_manifest(_chain()), {"model.t.fct"})
-    assert [c.unique_id for c in result] == [
-        "metric.t.revenue",
-        "saved_query.t.weekly",
-        "semantic_model.t.orders",
+    assert [(a.consumer.unique_id, a.via) for a in result] == [
+        ("semantic_model.t.orders", "model.t.fct"),
+        ("metric.t.revenue", "semantic_model.t.orders"),
+        ("saved_query.t.weekly", "metric.t.revenue"),
     ]
+
+
+def test_direct_dead_model_wins_over_an_affected_consumer() -> None:
+    # A metric on both a dead model and an affected semantic model is reported against the
+    # dead model: the direct cause is the actionable one.
+    consumers = _chain()
+    consumers["metric.t.revenue"] = SemanticConsumer(
+        unique_id="metric.t.revenue",
+        name="revenue",
+        kind="metric",
+        depends_on=("semantic_model.t.orders", "model.t.fct"),
+    )
+    result = affected_semantic_consumers(_manifest(consumers), {"model.t.fct"})
+    by_uid = {a.consumer.unique_id: a.via for a in result}
+    assert by_uid["metric.t.revenue"] == "model.t.fct"
 
 
 def test_alive_models_affect_nothing() -> None:

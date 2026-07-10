@@ -68,9 +68,15 @@ def test_render_json_roundtrips() -> None:
     assert data["unused_models"] == 1
     assert data["dead_models"][0]["total_bytes"] == 2048
     assert data["dead_models"][0]["resource_type"] == "model"
-    # Affected consumers are objects carrying kind and name, not bare unique_ids.
+    # Affected consumers are objects carrying kind, name, and the cause, not bare unique_ids.
     assert data["affected_exposures"] == [
-        {"kind": "exposure", "name": "orders_dashboard", "unique_id": "e1"}
+        {
+            "kind": "exposure",
+            "name": "orders_dashboard",
+            "unique_id": "e1",
+            "via_name": None,
+            "via_kind": None,
+        }
     ]
     assert data["columns"] is None
 
@@ -82,18 +88,90 @@ def test_render_text_lists_affected_semantic_consumers() -> None:
         active_models=1,
         unused_models=1,
         affected_semantic=(
-            AffectedConsumer("semantic_model", "orders", "semantic_model.p.orders"),
-            AffectedConsumer("metric", "revenue", "metric.p.revenue"),
-            AffectedConsumer("saved_query", "weekly", "saved_query.p.weekly"),
+            AffectedConsumer(
+                "semantic_model",
+                "orders",
+                "semantic_model.p.orders",
+                via_name="fct",
+                via_kind="model",
+            ),
+            AffectedConsumer(
+                "metric",
+                "revenue",
+                "metric.p.revenue",
+                via_name="orders",
+                via_kind="semantic_model",
+            ),
+            AffectedConsumer(
+                "saved_query",
+                "weekly",
+                "saved_query.p.weekly",
+                via_name="revenue",
+                via_kind="metric",
+            ),
         ),
         dead_models=(DeadModel("model.x.fct", "fct", "p.d.fct", 0),),
     )
     text = render_text(card)
-    assert "! 3 semantic-layer consumers affected (review before removing)" in text
-    # Each consumer is named with its kind, so the reader knows what to go and check.
-    assert "      - orders (semantic model)" in text
-    assert "      - revenue (metric)" in text
-    assert "      - weekly (saved query)" in text
+    assert (
+        "! 3 semantic-layer consumers read unused models "
+        "(they would break if those models are removed):"
+    ) in text
+    # Each consumer is named with its kind and what makes it affected: the unused model for
+    # direct hits, the consumer in between for transitive ones.
+    assert "      - orders (semantic model) — built on fct (unused)" in text
+    assert "      - revenue (metric) — via orders" in text
+    assert "      - weekly (saved query) — via revenue" in text
+
+
+def test_render_text_details_affected_semantic_consumers() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=1,
+        unused_models=1,
+        affected_semantic=(
+            AffectedConsumer(
+                "semantic_model",
+                "orders",
+                "semantic_model.p.orders",
+                via_name="fct",
+                via_kind="model",
+            ),
+            AffectedConsumer(
+                "metric",
+                "revenue",
+                "metric.p.revenue",
+                via_name="orders",
+                via_kind="semantic_model",
+            ),
+        ),
+        dead_models=(DeadModel("model.x.fct", "fct", "p.d.fct", 0),),
+    )
+    text = render_text(card, detail=True)
+    assert "Semantic-layer consumers reading unused models (2):" in text
+    assert "  - orders (semantic model)\n      depends on unused model: fct" in text
+    assert "  - revenue (metric)\n      via orders (semantic model)" in text
+    # The closing note says what "affected" means and what to do about it.
+    assert "(declared use only; it does not make the model count as used" in text
+
+
+def test_render_text_semantic_consumer_without_a_cause_stays_bare() -> None:
+    # Handcrafted scorecards may not resolve via_name; the line degrades to name and kind.
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=1,
+        unused_models=1,
+        affected_semantic=(AffectedConsumer("metric", "revenue", "metric.p.revenue"),),
+        dead_models=(DeadModel("model.x.fct", "fct", "p.d.fct", 0),),
+    )
+    text = render_text(card)
+    assert (
+        "! 1 semantic-layer consumer reads unused models "
+        "(it would break if those models are removed):"
+    ) in text
+    assert "      - revenue (metric)\n" in text
 
 
 def test_render_text_lists_too_new_nodes_separately() -> None:

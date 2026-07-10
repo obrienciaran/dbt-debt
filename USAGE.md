@@ -76,7 +76,9 @@ A few cases to keep in mind:
   likely a new table"), because `ACCOUNT_USAGE.TABLES` lags about 90 minutes behind reality.
 - **Semantic-layer declarations.** Models feeding a semantic model, metric, or saved query are
   flagged for review when unused (like exposures), and columns a semantic model names are never
-  counted as removable.
+  counted as removable. Each affected consumer is reported with its cause — the unused model it
+  is built on, or the affected consumer it reads through — in the summary and in a detail
+  section of its own.
 - **`SELECT *`** counts every column as used, so a column read only through a `*` is never
   wrongly called unused.
 

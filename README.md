@@ -43,8 +43,8 @@ Potential savings:
       - legacy_kpi_dashboard
   ! 1 exposure affected (review before removing)
       - weekly_revenue_dashboard
-  ! 1 semantic-layer consumer affected (review before removing)
-      - total_revenue (metric)
+  ! 1 semantic-layer consumer reads unused models (it would break if those models are removed):
+      - total_revenue (metric) — built on legacy_revenue (unused)
   - 5.0 GB reclaimable storage
 
 Top 3 of 3 unused columns (ranked by table bytes; BigQuery has no per-column sizes):
@@ -93,7 +93,9 @@ to 365 there.
   name, separately from the merely affected, as candidates to retire.
 - **semantic-layer consumers affected.** An unused model feeding a semantic model, metric, or
   saved query (even through a chain of metrics) is flagged for review the same way, and a column
-  a semantic model names is never counted as removable.
+  a semantic model names is never counted as removable. Each consumer is listed with what makes
+  it affected: the unused model it is built on, or the affected consumer it reads through
+  ("via"), so you can see the whole chain from the saved query down to the model.
 - **tables with no dbt model behind them (orphans).** A real table or view in a dataset dbt
   builds into, but with no dbt record, usually left over from a renamed or deleted model, or
   made by hand. Only datasets dbt builds into are searched, so raw input tables are never

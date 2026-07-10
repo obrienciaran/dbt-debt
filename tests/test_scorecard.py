@@ -202,7 +202,9 @@ def test_dead_model_flags_its_semantic_consumers() -> None:
     )
     graph = Graph.from_manifest(manifest)
     card = build_scorecard(manifest, graph, [], {}, _config())
-    assert [(c.kind, c.name) for c in card.affected_semantic] == [("semantic_model", "orders")]
+    assert [(c.kind, c.name, c.via_name, c.via_kind) for c in card.affected_semantic] == [
+        ("semantic_model", "orders", "fct_orders", "model")
+    ]
 
     # With the mart queried nothing is dead, so nothing is flagged.
     usage = [UsageRow(relation_key=FCT_KEY, query_count=1)]

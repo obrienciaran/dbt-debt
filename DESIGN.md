@@ -342,7 +342,10 @@ exposure over those is never flagged.
 
 The semantic layer (semantic models, metrics, saved queries; dbt 1.6+) is treated like
 exposures. These declare use; they don't prove it. A dead model that feeds a semantic model, or
-through it a metric or saved query, is flagged for review and never revived. A dead column that
+through it a metric or saved query, is flagged for review and never revived. The fixpoint
+records the dependency that condemned each consumer (a dead model directly, or the affected
+consumer in between), so the report names the cause on every line and the detail view walks
+the chain from the saved query down to the model. A dead column that
 a semantic model names in an entity, dimension, or measure `expr` is *blocked* rather than
 consumed (`verdict/semantic.py` and the blocker check). Real semantic-layer queries hit the
 warehouse and count as observed usage anyway. The node shapes are validated against a real

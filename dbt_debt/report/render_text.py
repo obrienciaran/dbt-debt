@@ -10,6 +10,7 @@ model's file path.
 from __future__ import annotations
 
 from dbt_debt.report.scorecard import (
+    AffectedConsumer,
     DeadColumn,
     DeadModel,
     OrphanReport,
@@ -136,14 +137,13 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
         )
         lines += [f"      - {e.name}" for e in scorecard.affected_exposures]
     if scorecard.affected_semantic:
+        count = len(scorecard.affected_semantic)
+        verb, pronoun = ("reads", "it") if count == 1 else ("read", "they")
         lines.append(
-            f"  ! {_plural(len(scorecard.affected_semantic), 'semantic-layer consumer')} "
-            "affected (review before removing)"
+            f"  ! {_plural(count, 'semantic-layer consumer')} {verb} unused models "
+            f"({pronoun} would break if those models are removed):"
         )
-        lines += [
-            f"      - {c.name} ({_CONSUMER_LABELS.get(c.kind, c.kind)})"
-            for c in scorecard.affected_semantic
-        ]
+        lines += [f"      - {_format_semantic(c)}" for c in scorecard.affected_semantic]
     if scorecard.reclaimable_bytes > 0:
         lines.append(f"  - {humanize_bytes(scorecard.reclaimable_bytes)} reclaimable storage")
     retained = sum(m.time_travel_bytes + m.failsafe_bytes for m in scorecard.dead_models)
@@ -206,8 +206,8 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
 
     Whole unused models are always listed; the per-column breakdown is added when the column stage
     (`--columns`) ran, so column scans show both grains rather than columns alone. The remaining
-    sections follow the summary's order — sources, docs drift, orphans, then the removable tests
-    under "potential savings".
+    sections follow the summary's order — sources, docs drift, orphans, the affected
+    semantic-layer consumers, then the removable tests under "potential savings".
     """
 
     lines = _detail_models(scorecard.dead_models)
@@ -250,8 +250,32 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
         lines += _detail_phantom_columns(scorecard.phantom_columns)
     if scorecard.orphans is not None:
         lines += _detail_orphans(scorecard.orphans)
+    if scorecard.affected_semantic:
+        lines += _detail_affected_semantic(scorecard.affected_semantic)
     if scorecard.removable_tests:
         lines += _detail_removable_tests(scorecard.removable_tests)
+    return lines
+
+
+def _detail_affected_semantic(consumers: tuple[AffectedConsumer, ...]) -> list[str]:
+    """Each affected consumer with the unused model or intermediate consumer that feeds it."""
+
+    lines = ["", f"Semantic-layer consumers reading unused models ({len(consumers)}):"]
+    for consumer in consumers:
+        lines.append(f"  - {consumer.name} ({_CONSUMER_LABELS.get(consumer.kind, consumer.kind)})")
+        if consumer.via_name is None:
+            continue
+        if consumer.via_kind in _BUILDABLE_KINDS:
+            lines.append(f"      depends on unused {consumer.via_kind}: {consumer.via_name}")
+        else:
+            via_kind = consumer.via_kind or ""
+            lines.append(
+                f"      via {consumer.via_name} ({_CONSUMER_LABELS.get(via_kind, via_kind)})"
+            )
+    lines.append(
+        "  (declared use only; it does not make the model count as used — remove or repoint "
+        "these consumers before removing the model)"
+    )
     return lines
 
 
@@ -454,6 +478,19 @@ _CONSUMER_LABELS = {
     "metric": "metric",
     "saved_query": "saved query",
 }
+
+_BUILDABLE_KINDS = ("model", "seed", "snapshot")
+
+
+def _format_semantic(consumer: AffectedConsumer) -> str:
+    """`name (kind) — built on X (unused)` for direct hits, `… — via Y` for transitive ones."""
+
+    base = f"{consumer.name} ({_CONSUMER_LABELS.get(consumer.kind, consumer.kind)})"
+    if consumer.via_name is None:
+        return base
+    if consumer.via_kind in _BUILDABLE_KINDS:
+        return f"{base} — built on {consumer.via_name} (unused)"
+    return f"{base} — via {consumer.via_name}"
 
 
 def _dead_kind_breakdown(dead_models: tuple[DeadModel, ...]) -> str:

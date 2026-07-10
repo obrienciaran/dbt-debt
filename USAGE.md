@@ -3,119 +3,89 @@
 For what dbt-debt is and how to get started, see [`README.md`](README.md). For how the code is
 put together, see [`DESIGN.md`](DESIGN.md).
 
-## ⚡ Making repeat runs fast (the cache)
-
-The slow part of a scan is talking to the warehouse, so the first scan saves its results to a
-small file in your temp folder. Run `dbt-debt scan` (or `dbt-debt scan --columns`) again soon
-after and it reads that file instead of re-querying. Results are keyed by warehouse and query
-parameters, so BigQuery and Snowflake scans never collide.
-
-Saved results count as fresh for 1 hour; after that the next scan refetches and replaces them.
-Change the window with `--cache-ttl <hours>`, or skip saved results with `--no-cache` for the
-latest numbers.
-
-The file isn't deleted the moment it goes stale. The 1-hour limit only decides when results are
-too old to trust. The file stays in your temp folder until something removes it:
-
-- `dbt-debt --clear-cache` deletes all of dbt-debt's saved results and does nothing else;
-- `dbt-debt scan --clear-cache` deletes this project's results, then runs a fresh scan;
-- the next scan replaces results over an hour old;
-- or your OS clears its temp folder, which is slow and unpredictable (Windows may never do it),
-  so don't count on this.
-
-For a clean slate, it's easiest to run `dbt-debt --clear-cache`.
-
 ## 🔧 How it works
 
 1. Read `manifest.json` and `catalog.json` from `target/`. dbt-debt never imports or runs dbt;
-   it just reads the files dbt already wrote. The manifest's `adapter_type` picks the warehouse
-   and `--warehouse` overrides it.
-2. Ask the warehouse which tables were queried (by people or tools) in the lookback window,
-   ignoring dbt's own queries. On BigQuery this reads `INFORMATION_SCHEMA.JOBS`; on Snowflake,
-   `ACCOUNT_USAGE.ACCESS_HISTORY`. The same rows carry how many bytes each query scanned
-   (BigQuery `total_bytes_processed`, Snowflake `bytes_scanned`), which the report uses to
-   rank the review lists by what queries actually cost. With `--columns`, also read those
-   queries' text to see which columns they used.
-3. Trace where each column came from, using your models' SQL, so usage flows back up to the
-   columns that fed it.
-4. Compare what got used against everything in your project, and report what's unused and safe
+   it only reads files dbt already wrote. The manifest's `adapter_type` picks the warehouse;
+   `--warehouse` overrides it.
+2. Ask the warehouse which tables were queried in the lookback window, ignoring dbt's own
+   queries. On BigQuery this reads `INFORMATION_SCHEMA.JOBS`; on Snowflake,
+   `ACCOUNT_USAGE.ACCESS_HISTORY`. The same rows say how many bytes each query scanned, which
+   ranks the review lists by what queries actually cost. With `--columns`, also read the query
+   text to see which columns were used.
+3. Trace each column back through your models' SQL, so usage flows up to the columns that fed
+   it.
+4. Compare what was used against everything in the project, and report what's unused and safe
    to remove.
-5. Look at the tables that really exist in the datasets dbt builds into, and flag the ones dbt
-   has no record of (orphans), plus the tables your models read but you never declared, plus
-   the declared sources nothing in your project reads.
-6. Check when each declared source's table last received data, from warehouse metadata; a
-   source with no new data for more than `--stale-source-days` (default 30) is flagged as
-   stale, since the loader upstream of dbt has likely stopped.
-7. From the dbt files alone, add the hygiene extras. These are the test and docs coverage
-   counts, documentation drift (YAML columns that no longer exist in the built table, per
-   `catalog.json`), likely-dead exposures (every model a dashboard reads is unused), and (on
-   BigQuery) any table of 1 GB or more built with neither `partition_by` nor `cluster_by`.
-   These need no warehouse access; the thresholds are explained in the README.
+5. List the tables that actually exist in the datasets dbt builds into, and flag orphans,
+   undeclared sources, and declared sources nothing in the project reads.
+6. Check when each declared source's table last received data, from warehouse metadata. No new
+   data for more than `--stale-source-days` (default 30) flags it stale: the loader upstream of
+   dbt has likely stopped.
+7. Add the hygiene extras from the dbt files alone (no warehouse access needed): test and docs
+   coverage, documentation drift (YAML columns that no longer exist in the built table),
+   likely-dead exposures, and, on BigQuery, tables of 1 GB or more with neither `partition_by`
+   nor `cluster_by`. The thresholds are explained in the README.
 
 ### 🔍 Orphans and sources, explained
 
 dbt keeps a record of every table it builds and every table it reads. Comparing that record
-against the warehouse and against your own project flags three kinds of gap:
+against the warehouse and against your own project flags four kinds of gap:
 
-- An **orphan** is a table really there in the warehouse, in a dataset dbt builds into, but with
-  no dbt record. It's usually left over from a renamed or deleted model, or made by hand.
-- An **undeclared source** is a table a model reads from that you never told dbt about, so it
-  sits outside the DAG and is never tracked or tested. Fix it by declaring it in a
-  `sources.yml` file and referencing it with `{{ source() }}`.
-- An **unused declared source** is the reverse. A source sits in a `sources.yml` and no model,
-  exposure, or semantic-layer consumer references it. The report shows any queries people ran
-  against the raw table directly, so you can tell a dead declaration (delete the entry) from a
-  table your team reads outside dbt (consider modelling it).
-- A **stale source** is a declared source whose table has received no new data for more than
-  `--stale-source-days` days (default 30; `0` turns the check off). The last-data date comes
-  from warehouse metadata, never from the query log, and a source whose metadata can't be read
-  is skipped rather than guessed at.
+- An **orphan** exists in a dataset dbt builds into, but dbt has no record of it. Usually a
+  leftover from a renamed or deleted model, or a table made by hand.
+- An **undeclared source** is a table a model reads that dbt was never told about, so it sits
+  outside the DAG, untracked and untested. Declare it in a `sources.yml` and reference it with
+  `{{ source() }}`.
+- An **unused declared source** is the reverse: a `sources.yml` entry no model, exposure, or
+  semantic-layer consumer references. The report shows any queries people ran against the raw
+  table directly, so you can tell a dead declaration (delete the entry) from a table your team
+  reads outside dbt (consider modelling it).
+- A **stale source** is a declared source with no new data for more than `--stale-source-days`
+  days (default 30; `0` turns the check off). The last-data date comes from warehouse metadata,
+  never the query log; a source whose metadata can't be read is skipped, not guessed at.
 
 Two rules keep the orphan counts clean:
 
-1. **Where we look.** We only search datasets dbt builds into (where models, seeds, and
-   snapshots land). Datasets that only hold raw data loaded by something else (Fivetran,
-   Airbyte, a manual load) are never searched, so raw input tables are never flagged.
-2. **How we classify what we find.** An unrecognized table inside a dataset dbt builds into is
-   an undeclared source if another dbt model queries it, or an orphan if nothing does.
+1. **Where we look.** Only datasets dbt builds into are searched. Datasets that just hold raw
+   data loaded by something else (Fivetran, Airbyte, a manual load) never are, so raw input
+   tables are never flagged.
+2. **How we classify.** An unrecognized table is an undeclared source if a dbt model queries
+   it, an orphan if nothing does.
 
 ## 🎯 What counts as "usage"
 
-Usage is any `SELECT` that ran against the warehouse in the lookback window and wasn't dbt's
-own query. That includes BI tools and dashboards that query the warehouse directly (Looker,
-Tableau, scheduled queries), which land in the query log like anything else.
+Usage is any `SELECT` that ran in the lookback window and wasn't dbt's own query. That includes
+BI tools and dashboards that query the warehouse directly (Looker, Tableau, scheduled queries).
 
 A few cases to keep in mind:
 
-- **Reads that don't hit the warehouse.** A cached BI extract, a scheduled export, or a copy
-  downstream never appears in the query log, so it can look unused. Tell dbt-debt about them by
-  declaring exposures (see below); a model that feeds one is flagged for review instead of
+- **Reads that don't hit the warehouse.** A cached BI extract, a scheduled export, or a
+  downstream copy never appears in the query log, so it can look unused. Declare those
+  consumers as exposures (see below); a model feeding one is flagged for review instead of
   marked removable.
-- **Anything used less often than the lookback window.** On BigQuery the default 180 days is
-  also the max, since that's all it keeps; Snowflake keeps a year, so `--lookback-days` can go
-  to 365 there. A report that runs once a year can still look unused, so those need a human
-  call.
-- **Anything created recently.** A table that first appeared in the query log fewer than 7 days
-  ago (`--min-age-days`) hasn't had a fair chance to be queried, so it's reported as "too new
-  to judge" instead of unused, and left out of the removable-test and reclaimable-storage
-  figures. On Snowflake, a table with no first-seen date at all gets the same treatment
-  ("missing a first-seen date, likely a new table"), because `ACCOUNT_USAGE.TABLES` lags
-  about 90 minutes behind reality.
+- **Anything used less often than the lookback window.** BigQuery keeps 180 days of history
+  (the default and the max); Snowflake keeps a year, so `--lookback-days` can go to 365 there.
+  A report that runs once a year can still look unused; that needs a human call.
+- **Anything created recently.** A table first seen in the query log fewer than 7 days ago
+  (`--min-age-days`) hasn't had a fair chance to be queried, so it's reported as "too new to
+  judge" and left out of the removable-test and reclaimable-storage figures. On Snowflake, a
+  table with no first-seen date at all gets the same treatment ("missing a first-seen date,
+  likely a new table"), because `ACCOUNT_USAGE.TABLES` lags about 90 minutes behind reality.
 - **Semantic-layer declarations.** Models feeding a semantic model, metric, or saved query are
-  flagged for review when unused (like exposures), and columns a semantic model names are
-  marked blocked, never removable.
-- **`SELECT *`** is handled carefully. Every column counts as used, so a column read only
-  through a `*` is never wrongly called unused.
+  flagged for review when unused (like exposures), and columns a semantic model names are never
+  counted as removable.
+- **`SELECT *`** counts every column as used, so a column read only through a `*` is never
+  wrongly called unused.
 
 So "unused" means "no sign of use in the log". How far to trust it depends on who reads the
 column:
 
-- Columns mid-pipeline are mostly read by other dbt models, whose reads land in the log. For
-  them, nothing in the log is a strong "unused" signal you can trust.
-- Columns at the end, in your final marts, are often read by tools outside the warehouse, like
-  a dashboard or export, whose reads can miss the log. An "unused" verdict there is less
-  certain; use judgement. Best practice is to declare those consumers as exposures so a model
-  feeding one is flagged for review instead.
+- Columns mid-pipeline are read by other dbt models, whose reads land in the log. For them, an
+  "unused" verdict is strong.
+- Columns in your final marts are often read by tools outside the warehouse, whose reads can
+  miss the log. An "unused" verdict there is less certain; use judgement, and declare those
+  consumers as exposures so the models feeding them are flagged for review instead.
 
 ### 📣 Telling dbt-debt about your dashboards (exposures)
 
@@ -146,16 +116,15 @@ at the end of your pipeline.
 dbt-debt signs in the same way `gcloud` does (`gcloud auth application-default login`) and runs
 in the project your models live in (read from your project, or set with `--project`).
 
-- **Required.** Permission to see everyone's queries, and only your own is never enough
-  (`bigquery.jobs.listAll`, part of `roles/bigquery.resourceViewer`). dbt-debt checks for this
-  up front and stops if it's missing; otherwise "unused" would mean "unused by me".
-- **Optional, for orphans.** Read access to the datasets dbt builds into. Listing the tables
-  that physically exist asks each dataset for its own table list, which is basic read access
+- **Required.** Permission to see everyone's queries, not just your own
+  (`bigquery.jobs.listAll`, part of `roles/bigquery.resourceViewer`). dbt-debt checks this up
+  front and stops if it's missing; otherwise "unused" would mean "unused by me".
+- **Optional, for orphans.** Read access to the datasets dbt builds into — the basic access
   anyone who writes dbt models already has. Without it, the orphan list is skipped with a
   warning and the rest of the scan is unaffected.
-- **Optional, for stale sources.** Read access to the datasets your sources live in. The
-  last-data date comes from each source dataset's own `__TABLES__` metadata. Without access,
-  the stale-source check is skipped with a warning.
+- **Optional, for stale sources.** Read access to the datasets your sources live in, where the
+  last-data date is read from dataset metadata. Without it, the stale-source check is skipped
+  with a warning.
 
 That required grant is the only one. Table sizes (used to rank unused tables) come from
 `catalog.json`, which `dbt docs generate` already fills in, so they need no extra access.
@@ -167,9 +136,9 @@ the connector can find, either in `~/.snowflake/connections.toml` or as `SNOWFLA
 environment variables. Pass `--connection NAME` if it isn't the default one.
 
 **Signing in.** Any sign-in method the Snowflake connector supports will work. In practice a
-key pair is the reliable choice, because new Snowflake accounts require MFA on password logins,
-and browser sign-in (`externalbrowser`) fails unless the account has an identity provider set
-up. The key-pair setup is done once:
+key pair is the reliable choice: new Snowflake accounts require MFA on password logins, and
+browser sign-in (`externalbrowser`) fails without an identity provider set up. The key-pair
+setup is done once:
 
 1. Make a key pair on your machine:
 
@@ -207,22 +176,21 @@ up. The key-pair setup is done once:
 
 - **Required.** IMPORTED PRIVILEGES on the `SNOWFLAKE` database (so `ACCOUNT_USAGE` is
   readable) and Enterprise edition (`ACCESS_HISTORY` is an Enterprise view). dbt-debt checks up
-  front and stops if either is missing. Usage deliberately comes from ACCESS_HISTORY's access
-  metadata and never from parsing query text, so an unparseable query can never erase evidence
-  of use.
+  front and stops if either is missing. Usage comes from ACCESS_HISTORY's access metadata and
+  never from parsing query text, so an unparseable query can never erase evidence of use.
 - **Optional, for orphans.** USAGE on the database and its managed schemas, to read
   `INFORMATION_SCHEMA.TABLES`. Missing access skips the orphan list with a warning, as on
   BigQuery.
 
 The stale-source check needs no extra grant on Snowflake: it reads `ACCOUNT_USAGE.TABLES`,
-already required for the "too new" guard. One caveat: its `last_altered` date also moves on
-DDL changes, so a stale table can occasionally look fresher than its data.
+already required for the "too new" guard. One caveat: its `last_altered` date also moves on DDL
+changes (even a table comment), so a stale table can occasionally look fresher than its data.
 
 **Two timing notes.** `ACCOUNT_USAGE` views lag reality; Snowflake documents 90 minutes for
 `TABLES` and 3 hours for `ACCESS_HISTORY` (both approximate; in practice often much less).
-Because the table list behind the "too new" guard can lag, a dead table with no first-seen
-date yet is set aside as "missing a first-seen date (likely a new table)" rather than judged.
-Scan again later, or with `--no-cache`, and it settles into a normal verdict.
+Because the table list behind the "too new" guard can lag, a dead table with no first-seen date
+yet is set aside as "missing a first-seen date (likely a new table)" rather than judged. Scan
+again later, or with `--no-cache`, and it settles into a normal verdict.
 
 ## ⚙️ Options
 
@@ -262,6 +230,28 @@ access); `2` a local problem (a missing or malformed manifest/catalog, an invali
 unsupported adapter, an unwritable output path); `3` a warehouse problem (not signed in, missing
 the required permission, a missing optional connector, or any warehouse error mid-scan); `130`
 interrupted with Ctrl-C.
+
+## ⚡ Making repeat runs fast (the cache)
+
+The slow part of a scan is talking to the warehouse, so the first scan saves its results to a
+small file in your temp folder. Scan again soon after and it reads that file instead of
+re-querying. Results are keyed by warehouse and query parameters, so BigQuery and Snowflake
+scans never collide.
+
+Saved results count as fresh for 1 hour; after that the next scan refetches and replaces them.
+Change the window with `--cache-ttl <hours>`, or skip saved results with `--no-cache` for the
+latest numbers.
+
+The 1-hour limit only decides when results are too old to trust; the file itself stays in your
+temp folder until something removes it:
+
+- `dbt-debt --clear-cache` deletes all of dbt-debt's saved results and does nothing else;
+- `dbt-debt scan --clear-cache` deletes this project's results, then runs a fresh scan;
+- the next scan replaces results over an hour old;
+- or your OS clears its temp folder — slow and unpredictable (Windows may never do it), so
+  don't count on it.
+
+For a clean slate, run `dbt-debt --clear-cache`.
 
 ## 🛠️ Working on dbt-debt
 

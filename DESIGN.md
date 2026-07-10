@@ -195,7 +195,12 @@ cost no extra warehouse call. They are reported as bytes, never dollars: bytes m
 money only on BigQuery on-demand pricing, and any dollar figure would be a guess. A query
 touching several tables attributes its whole figure to each, so the numbers rank tables rather
 than bill them, and they are a review signal only — no usage verdict ever depends on them. The
-same figure backs the direct-query evidence on unused declared sources. Orphaned relations
+same figure backs the direct-query evidence on unused declared sources. The signal is validated
+live on both warehouses: the rare band's counts, dates, and scanned bytes match the queries run
+against the demos, and the ranking follows bytes rather than query count. One trap the live run
+surfaced: a query run in a different GCP project than the scan targets never appears in that
+project's `INFORMATION_SCHEMA.JOBS`, which is exactly the project-scoping the up-front
+permission check exists for. Orphaned relations
 carry no usage evidence at all today; attaching it (an orphan still queried directly is
 dangerous to drop) is a possible follow-up, not part of this.
 
@@ -212,10 +217,11 @@ report notes that a stale catalog can false-positive, pointing at `dbt docs gene
 micro-partitions automatically and its explicit clustering keys are optional large-table tuning
 rather than debt. The floor is on stored size, but the ranking is by the bytes user queries
 scanned over the window (stored size as the fallback): an unpartitioned table only costs money
-when queried, so the top entry is the partitioning fix that saves the most. Validated live
-2026-07-10 on `demo_bq`: a planted 1.34 GiB generated-rows table was flagged, disappeared once
-`cluster_by` was declared and rebuilt, and small tables never fired it (the scanned-bytes
-ranking landed after that scan and is pinned by tests, not yet eyeballed live).
+when queried, so the top entry is the partitioning fix that saves the most. Validated live on
+`demo_bq`: a planted 1.34 GiB generated-rows table was flagged, disappeared once `cluster_by`
+was declared and rebuilt, and small tables never fired it; with two such tables planted and
+different byte volumes queried from each, the list ordered them by scanned bytes (875.5 MB
+above 291.8 MB), matching the queries run.
 
 ## Working out where columns come from
 
@@ -277,11 +283,15 @@ loader upstream of dbt has stopped, which no usage figure can catch. The last-da
 from warehouse metadata, never from query history. On BigQuery each source dataset's legacy
 `__TABLES__` table supplies `last_modified_time` (updated by loads and streaming writes) and
 needs only dataset read access, the same optional grant as orphans; a missing grant skips the
-check with a warning. *Inference to confirm live:* `__TABLES__` is a legacy surface, readable
-from standard SQL. On Snowflake the check reads `ACCOUNT_USAGE.TABLES.last_altered` (already
-required for first-seen, so no new grant), taking `MAX` over the live rows. Documented caveat:
-`last_altered` also moves on DDL, so the check can under-report staleness there, never invent
-it. A source with no metadata row is skipped, since absent metadata is not evidence. The
+check with a warning. Both halves are confirmed live on `demo_bq`: `__TABLES__` is a legacy
+surface but reads fine from standard SQL, a source pointing at an old table is flagged with its
+last-data date, and a source dataset the scan cannot read degrades to the one-line warning with
+the rest of the scan (orphans included) unaffected and exit code 0. On Snowflake the check
+reads `ACCOUNT_USAGE.TABLES.last_altered` (already required for first-seen, so no new grant),
+taking `MAX` over the live rows; confirmed on the trial account, where every demo table returns
+a date and a declared source past the threshold is flagged. Documented caveat, also observed
+live: a bare `COMMENT ON TABLE` moves `last_altered` immediately, so any DDL resets the
+staleness clock and the check can under-report staleness there, never invent it. A source with no metadata row is skipped, since absent metadata is not evidence. The
 verdict is pure (sources and a date map in, a list out) and, like every review band, feeds no
 unused figure.
 

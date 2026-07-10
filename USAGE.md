@@ -32,8 +32,10 @@ For a clean slate, it's easiest to run `dbt-debt --clear-cache`.
    and `--warehouse` overrides it.
 2. Ask the warehouse which tables were queried (by people or tools) in the lookback window,
    ignoring dbt's own queries. On BigQuery this reads `INFORMATION_SCHEMA.JOBS`; on Snowflake,
-   `ACCOUNT_USAGE.ACCESS_HISTORY`. With `--columns`, also read those queries' text to see which
-   columns they used.
+   `ACCOUNT_USAGE.ACCESS_HISTORY`. The same rows carry how many bytes each query scanned
+   (BigQuery `total_bytes_processed`, Snowflake `bytes_scanned`), which the report uses to
+   rank the review lists by what queries actually cost. With `--columns`, also read those
+   queries' text to see which columns they used.
 3. Trace where each column came from, using your models' SQL, so usage flows back up to the
    columns that fed it.
 4. Compare what got used against everything in your project, and report what's unused and safe

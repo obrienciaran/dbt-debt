@@ -149,6 +149,7 @@ def test_render_text_lists_rarely_used_band_with_its_evidence() -> None:
                 query_count=2,
                 last_queried="2026-06-14T12:00:00+00:00",
                 total_bytes=2048,
+                bytes_scanned=3 * 1024,
                 file_path="models/dim_old.sql",
             ),
             RarelyUsedModel(
@@ -166,8 +167,9 @@ def test_render_text_lists_rarely_used_band_with_its_evidence() -> None:
     text = render_text(card, detail=True)
     assert "~ 2 rarely used (at most 5 queries; not counted in 'unused')" in text
     assert "Top 2 of 2 rarely used models" in text
-    assert "dim_old (2 queries, last 2026-06-14, 2.0 KB)" in text
-    # No last-queried or size shown when unknown; non-model kinds are tagged.
+    assert "most bytes scanned first" in text
+    assert "dim_old (2 queries, last 2026-06-14, 2.0 KB, 3.0 KB scanned)" in text
+    # No last-queried, size, or scanned bytes shown when unknown; non-model kinds are tagged.
     assert "codes (seed) (1 query)" in text
     assert "Rarely used models (2):" in text
     assert "models/dim_old.sql" in text
@@ -201,7 +203,15 @@ def test_render_text_coverage_sentences_and_unpartitioned_tables() -> None:
                 relation_key="p.d.events",
                 total_bytes=12 * 1024**3,
                 materialized="table",
+                bytes_scanned=30 * 1024**3,
                 file_path="models/events.sql",
+            ),
+            UnpartitionedTable(
+                unique_id="model.x.archive",
+                name="archive",
+                relation_key="p.d.archive",
+                total_bytes=8 * 1024**3,
+                materialized="table",
             ),
         ),
     )
@@ -210,8 +220,10 @@ def test_render_text_coverage_sentences_and_unpartitioned_tables() -> None:
     assert "- tests: 2 of 3 models have at least one test (67%)" in text
     assert "- model docs: 1 of 3 models have a description (33%)" in text
     assert "- column docs: 4 of 10 columns have a description (40%, catalog columns)" in text
-    assert "Large tables with neither partition_by nor cluster_by (1" in text
-    assert "- events (12.0 GB, table)" in text
+    assert "Large tables with neither partition_by nor cluster_by (2" in text
+    assert "- events (12.0 GB, table, 30.0 GB scanned)" in text
+    # The scanned part is dropped when the window saw no reads of the table.
+    assert "- archive (8.0 GB, table)" in text
     assert "models/events.sql" in text
     data = json.loads(render_json(card))
     assert data["coverage"]["tested_models"] == 2
@@ -454,6 +466,7 @@ def test_render_text_lists_unused_sources_with_query_evidence() -> None:
                 relation_key="db.raw.events",
                 query_count=3,
                 last_queried="2026-06-01T00:00:00+00:00",
+                bytes_scanned=5 * 1024**2,
                 file_path="models/staging/sources.yml",
             ),
             UnusedSource(
@@ -471,7 +484,7 @@ def test_render_text_lists_unused_sources_with_query_evidence() -> None:
     detail = render_text(card, detail=True)
     assert "Declared sources nothing in the project reads (2):" in detail
     assert (
-        "  - raw.events  (queried directly: 3 queries, last 2026-06-01)"
+        "  - raw.events  (queried directly: 3 queries, last 2026-06-01, 5.0 MB scanned)"
         "  models/staging/sources.yml" in detail
     )
     assert "  - raw.legacy  (no queries seen)" in detail

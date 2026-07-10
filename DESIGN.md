@@ -182,10 +182,22 @@ The design decisions, and what remains to confirm:
 
 Between active and unused sits a third verdict (`verdict/rarity.py`). A model queried at most
 `--rare-threshold` times (default 5) in the window is **rarely used**. It is reported with its
-query count, last-queried date, and size so an owner can judge it, and it is never folded into
-any unused-derived figure, because observed use is use. The too-new guard applies to the band
+query count, last-queried date, size, and the bytes its queries scanned, and it is never folded
+into any unused-derived figure, because observed use is use. The band is ranked by scanned
+bytes first (stored size as the fallback), so the expensive-but-rarely-used model — the
+strongest deprecation candidate — tops the list. The too-new guard applies to the band
 the same way it applies to the dead set (a model created mid-window hasn't had a full window to
 accumulate queries). The usage counts were always fetched; this band just stops discarding them.
+
+The scanned bytes come from one extra column in the existing usage queries
+(`JOBS.total_bytes_processed` on BigQuery, `QUERY_HISTORY.bytes_scanned` on Snowflake), so they
+cost no extra warehouse call. They are reported as bytes, never dollars: bytes map directly to
+money only on BigQuery on-demand pricing, and any dollar figure would be a guess. A query
+touching several tables attributes its whole figure to each, so the numbers rank tables rather
+than bill them, and they are a review signal only — no usage verdict ever depends on them. The
+same figure backs the direct-query evidence on unused declared sources. Orphaned relations
+carry no usage evidence at all today; attaching it (an orphan still queried directly is
+dangerous to drop) is a possible follow-up, not part of this.
 
 Three hygiene stats ride along, all computed from dbt's own files with no warehouse call.
 `verdict/coverage.py` counts models with at least one test and models and columns with
@@ -195,12 +207,15 @@ declared in a model's YAML that no longer exists in the built relation per `cata
 Nodes absent from the catalog are skipped (an unknown physical schema is not drift), and the
 report notes that a stale catalog can false-positive, pointing at `dbt docs generate`.
 `verdict/partitioning.py` flags the largest `table` and
-`incremental` models (1 GiB or more, at most 20) declaring neither `partition_by` nor
-`cluster_by`. That check only runs on BigQuery, since Snowflake micro-partitions automatically
-and its explicit clustering keys are optional large-table tuning rather than debt. It ranks by
-*stored* bytes; scan cost is not collected (see the backlog). Validated live 2026-07-10 on
-`demo_bq`: a planted 1.34 GiB generated-rows table was flagged, disappeared once `cluster_by`
-was declared and rebuilt, and small tables never fired it.
+`incremental` models (1 GiB or more of *stored* bytes, at most 20) declaring neither
+`partition_by` nor `cluster_by`. That check only runs on BigQuery, since Snowflake
+micro-partitions automatically and its explicit clustering keys are optional large-table tuning
+rather than debt. The floor is on stored size, but the ranking is by the bytes user queries
+scanned over the window (stored size as the fallback): an unpartitioned table only costs money
+when queried, so the top entry is the partitioning fix that saves the most. Validated live
+2026-07-10 on `demo_bq`: a planted 1.34 GiB generated-rows table was flagged, disappeared once
+`cluster_by` was declared and rebuilt, and small tables never fired it (the scanned-bytes
+ranking landed after that scan and is pinned by tests, not yet eyeballed live).
 
 ## Working out where columns come from
 

@@ -75,8 +75,10 @@ class RarelyUsedModel:
     """A queried node whose few queries put it in the review band, with the usage that dates it.
 
     `last_queried` is an ISO-8601 string (not a datetime) so the scorecard serializes to JSON
-    unchanged; `total_bytes` sizes what a deprecation would reclaim. Never folded into the
-    unused figures — observed use, however small, is still use.
+    unchanged; `total_bytes` sizes what a deprecation would reclaim, and `bytes_scanned` is
+    what the few queries read over the window — high scanned bytes on a rarely used model is
+    the "expensive but rarely used" deprecation argument. Never folded into the unused
+    figures — observed use, however small, is still use.
     """
 
     unique_id: str
@@ -85,6 +87,7 @@ class RarelyUsedModel:
     query_count: int
     last_queried: str | None
     total_bytes: int
+    bytes_scanned: int = 0
     file_path: str | None = None
     resource_type: str = "model"
 
@@ -93,9 +96,10 @@ class RarelyUsedModel:
 class UnusedSource:
     """A declared source nothing in the project reads, with any direct-query evidence.
 
-    `query_count` / `last_queried` come from the same usage rows the model verdicts join:
-    a non-zero count means people query the raw table directly (worth modelling, not just
-    deleting the declaration), zero means the declaration is dead weight in sources.yml.
+    `query_count` / `last_queried` / `bytes_scanned` come from the same usage rows the model
+    verdicts join: a non-zero count means people query the raw table directly (worth
+    modelling, not just deleting the declaration), zero means the declaration is dead weight
+    in sources.yml, and the scanned bytes size how much those direct reads cost.
     `last_queried` is an ISO-8601 string so the scorecard serializes to JSON unchanged.
     """
 
@@ -104,6 +108,7 @@ class UnusedSource:
     relation_key: str
     query_count: int
     last_queried: str | None = None
+    bytes_scanned: int = 0
     file_path: str | None = None
 
 
@@ -141,8 +146,10 @@ class PhantomColumn:
 class UnpartitionedTable:
     """A large BigQuery table built with neither `partition_by` nor `cluster_by` declared.
 
-    Sized by *stored* bytes from the catalog (scan cost is not collected); `materialized` says
-    whether it is a plain table or an incremental model.
+    `total_bytes` is the *stored* size from the catalog; `bytes_scanned` is what user queries
+    read from it over the window (every one a full scan, since nothing prunes) — the list is
+    ranked by it, so the top entry is the partitioning fix that saves the most. `materialized`
+    says whether it is a plain table or an incremental model.
     """
 
     unique_id: str
@@ -150,6 +157,7 @@ class UnpartitionedTable:
     relation_key: str
     total_bytes: int
     materialized: str
+    bytes_scanned: int = 0
     file_path: str | None = None
 
 
@@ -325,12 +333,22 @@ def build_scorecard(
             query_count=row.query_count,
             last_queried=row.last_queried.isoformat() if row.last_queried else None,
             total_bytes=_model_bytes(manifest, storage_bytes, uid),
+            bytes_scanned=row.bytes_scanned,
             file_path=manifest.models[uid].original_file_path,
             resource_type=manifest.models[uid].resource_type,
         )
 
     def ranked_rarely_used(uids: Set[str]) -> tuple[RarelyUsedModel, ...]:
-        ranked = sorted(uids, key=lambda uid: (-_model_bytes(manifest, storage_bytes, uid), uid))
+        # Most scanned bytes first — the "expensive but rarely used" candidates on top — then
+        # stored size, so the ranking still works when the warehouse reports no byte figures.
+        ranked = sorted(
+            uids,
+            key=lambda uid: (
+                -usage_by_model[uid].bytes_scanned,
+                -_model_bytes(manifest, storage_bytes, uid),
+                uid,
+            ),
+        )
         return tuple(rarely_used_entry(uid) for uid in ranked)
 
     # Unused declared sources are a manifest verdict; the usage rows (already fetched for the
@@ -346,6 +364,7 @@ def build_scorecard(
             relation_key=relation.relation_key,
             query_count=row.query_count if row else 0,
             last_queried=row.last_queried.isoformat() if row and row.last_queried else None,
+            bytes_scanned=row.bytes_scanned if row else 0,
             file_path=relation.original_file_path,
         )
 
@@ -385,9 +404,11 @@ def build_scorecard(
     )
 
     # The partitioning check is BigQuery-specific: Snowflake micro-partitions automatically and
-    # its explicit clustering keys are optional tuning, not debt.
+    # its explicit clustering keys are optional tuning, not debt. Ranked by the bytes user
+    # queries scanned (from the usage rows already fetched), so the costliest offender is first.
     unpartitioned: tuple[UnpartitionedTable, ...] = ()
     if config.warehouse == "bigquery":
+        scanned_by_key = {row.relation_key: row.bytes_scanned for row in usage_rows}
         unpartitioned = tuple(
             UnpartitionedTable(
                 unique_id=uid,
@@ -395,9 +416,12 @@ def build_scorecard(
                 relation_key=manifest.models[uid].relation_key,
                 total_bytes=_model_bytes(manifest, storage_bytes, uid),
                 materialized=manifest.models[uid].materialized or "table",
+                bytes_scanned=scanned_by_key.get(manifest.models[uid].relation_key, 0),
                 file_path=manifest.models[uid].original_file_path,
             )
-            for uid in unpartitioned_large_tables(manifest.models, storage_bytes)
+            for uid in unpartitioned_large_tables(
+                manifest.models, storage_bytes, scanned_bytes=scanned_by_key
+            )
         )
 
     def ranked_assets(uids: Set[str]) -> tuple[DeadModel, ...]:

@@ -51,13 +51,16 @@ def table_usage_query(region: str, lookback_days: int, exclusion_clause: str) ->
     `JOBS_BY_PROJECT` requires `bigquery.jobs.listAll` to see all users' jobs (preflighted
     elsewhere). Each `referenced_tables` entry a job touched becomes one counted row; dbt's own
     queries are removed by `exclusion_clause`, and only completed, error-free `SELECT`s count.
+    `total_bytes_processed` is the job's whole figure, so a job referencing several tables
+    attributes it to each — good enough for ranking, not for exact billing.
     """
 
     return f"""
 SELECT
   LOWER(CONCAT(ref.project_id, '.', ref.dataset_id, '.', ref.table_id)) AS relation_key,
   COUNT(*) AS query_count,
-  MAX(creation_time) AS last_queried
+  MAX(creation_time) AS last_queried,
+  COALESCE(SUM(total_bytes_processed), 0) AS bytes_scanned
 FROM {_region_dataset(region)}.INFORMATION_SCHEMA.JOBS_BY_PROJECT,
   UNNEST(referenced_tables) AS ref
 WHERE {_user_select_filter(lookback_days, exclusion_clause)}
@@ -206,13 +209,18 @@ def parse_last_modified_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, dat
 
 
 def parse_usage_rows(rows: Iterable[Mapping[str, Any]]) -> list[UsageRow]:
-    """Parse usage query rows into `UsageRow` value objects."""
+    """Parse usage query rows into `UsageRow` value objects.
+
+    `bytes_scanned` tolerates an absent or NULL column so cached rows written before it
+    existed still parse (as 0) rather than failing the scan.
+    """
 
     return [
         UsageRow(
             relation_key=str(row["relation_key"]).lower(),
             query_count=int(row["query_count"]),
             last_queried=row["last_queried"],
+            bytes_scanned=int(row.get("bytes_scanned") or 0),
         )
         for row in rows
     ]

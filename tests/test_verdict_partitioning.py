@@ -57,6 +57,21 @@ def test_seeds_and_unknown_sizes_are_never_flagged() -> None:
     assert unpartitioned_large_tables(models, {"p.d.codes": 5 * _GB}) == ()
 
 
+def test_scanned_bytes_rank_ahead_of_stored_size() -> None:
+    # A smaller table user queries actually read outranks a bigger untouched one — the top of
+    # the list is the partitioning fix that saves the most, not the biggest table. The floor
+    # stays on stored size, so scanned bytes never flag a table too small to matter.
+    models = {
+        "model.p.busy": _model("model.p.busy", "table"),
+        "model.p.idle": _model("model.p.idle", "table"),
+        "model.p.small": _model("model.p.small", "table"),
+    }
+    storage = {"p.d.busy": 2 * _GB, "p.d.idle": 9 * _GB, "p.d.small": _GB // 2}
+    scanned = {"p.d.busy": 50 * _GB, "p.d.small": 80 * _GB}
+    flagged = unpartitioned_large_tables(models, storage, scanned_bytes=scanned)
+    assert flagged == ("model.p.busy", "model.p.idle")
+
+
 def test_cap_keeps_the_largest() -> None:
     models = {f"model.p.t{i:02d}": _model(f"model.p.t{i:02d}", "table") for i in range(25)}
     storage = {f"p.d.t{i:02d}": (25 - i) * _GB for i in range(25)}

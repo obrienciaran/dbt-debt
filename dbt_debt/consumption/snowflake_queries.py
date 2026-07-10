@@ -68,14 +68,16 @@ def table_usage_query(lookback_days: int, exclusion: str) -> str:
     query touched) becomes one counted row, joined to QUERY_HISTORY for the SELECT-only /
     success / window / dbt-exclusion filters. `objectName` is already the fully qualified
     `DATABASE.SCHEMA.TABLE`, lowercased into the canonical relation_key. The caller builds
-    `exclusion` against `qh.query_text`.
+    `exclusion` against `qh.query_text`. `bytes_scanned` is the query's whole figure, so a
+    query touching several tables attributes it to each — a ranking signal, not billing.
     """
 
     return f"""
 SELECT
   LOWER(obj.value:"objectName"::STRING) AS relation_key,
   COUNT(*) AS query_count,
-  MAX(qh.start_time) AS last_queried
+  MAX(qh.start_time) AS last_queried,
+  COALESCE(SUM(qh.bytes_scanned), 0) AS bytes_scanned
 FROM {_ACCESS_HISTORY} AS ah,
   LATERAL FLATTEN(input => ah.direct_objects_accessed) AS obj,
   {_QUERY_HISTORY} AS qh

@@ -82,12 +82,16 @@ class UsageRow:
 
     Produced by the consumption layer (dbt's own queries already excluded). `relation_key` is
     the canonical join key (see `relation_key`); `query_count` and `last_queried` quantify and
-    date the consumption that keeps a model alive.
+    date the consumption that keeps a model alive. `bytes_scanned` sums what those queries
+    read (BigQuery `total_bytes_processed`, Snowflake `bytes_scanned`) — a cost signal for the
+    review lists only, never an input to any usage verdict. A query touching several tables
+    attributes its whole figure to each, so sums across tables overlap.
     """
 
     relation_key: str
     query_count: int
     last_queried: datetime | None = None
+    bytes_scanned: int = 0
 
 
 @dataclass(frozen=True)

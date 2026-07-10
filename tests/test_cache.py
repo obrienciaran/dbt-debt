@@ -247,8 +247,14 @@ def test_unwritable_cache_dir_fails_open(
 
 def test_usage_round_trip_preserves_last_queried() -> None:
     when = datetime(2026, 6, 1, 12, 30, tzinfo=timezone.utc)
-    rows = [UsageRow("a.b.c", 3, when), UsageRow("d.e.f", 1, None)]
+    rows = [UsageRow("a.b.c", 3, when, bytes_scanned=2048), UsageRow("d.e.f", 1, None)]
     assert _usage_from_json(_usage_to_json(rows)) == rows
+
+
+def test_usage_entry_written_before_bytes_were_stored_reads_as_zero() -> None:
+    # A cache entry from before bytes_scanned existed has no key; it must decode, not crash.
+    data = [{"relation_key": "a.b.c", "query_count": 3, "last_queried": None}]
+    assert _usage_from_json(data) == [UsageRow("a.b.c", 3, None, bytes_scanned=0)]
 
 
 def test_relations_round_trip() -> None:

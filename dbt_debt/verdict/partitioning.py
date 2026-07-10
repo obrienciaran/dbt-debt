@@ -7,8 +7,10 @@ come from the catalog-derived bytes map, and a floor keeps small projects from b
 wholesale. Snowflake is skipped entirely by the caller: its micro-partitioning is automatic and
 explicit clustering keys are an optional large-table tuning lever, not debt.
 
-Ranked by *stored* bytes — what the catalog records — not bytes processed; scan cost is not
-collected (see the backlog).
+Flagging is by *stored* bytes — what the catalog records — but ranking puts the tables user
+queries actually scanned the most first (from the usage rows' bytes), falling back to stored
+size: an unpartitioned table only costs money when queried, so the top of the list is the
+best partitioning candidate, not just the biggest table.
 """
 
 from __future__ import annotations
@@ -30,17 +32,25 @@ def unpartitioned_large_tables(
     models: Mapping[str, Model],
     storage_bytes: Mapping[str, int],
     *,
+    scanned_bytes: Mapping[str, int] | None = None,
     floor_bytes: int = PARTITION_FLOOR_BYTES,
     max_flagged: int = MAX_FLAGGED,
 ) -> tuple[str, ...]:
     """Unique_ids of the largest partitionable models with neither `partition_by` nor `cluster_by`.
 
-    Largest first, ties by unique_id, capped at `max_flagged`. Models without a known size are
-    below any positive floor and so never flagged — no catalog, no verdict.
+    The floor is on stored size; the ranking is by `scanned_bytes` (what user queries read over
+    the window, keyed by relation_key) first, stored size second, ties by unique_id, capped at
+    `max_flagged`. Models without a known size are below any positive floor and so never
+    flagged — no catalog, no verdict.
     """
 
+    scanned = scanned_bytes or {}
     flagged = [
-        (storage_bytes.get(model.relation_key, 0), unique_id)
+        (
+            scanned.get(model.relation_key, 0),
+            storage_bytes.get(model.relation_key, 0),
+            unique_id,
+        )
         for unique_id, model in models.items()
         if model.resource_type == "model"
         and model.materialized in _PARTITIONABLE
@@ -48,7 +58,7 @@ def unpartitioned_large_tables(
         and not model.clustered
     ]
     ranked = sorted(
-        ((size, uid) for size, uid in flagged if size >= floor_bytes),
-        key=lambda item: (-item[0], item[1]),
+        (entry for entry in flagged if entry[1] >= floor_bytes),
+        key=lambda item: (-item[0], -item[1], item[2]),
     )
-    return tuple(uid for _, uid in ranked[:max_flagged])
+    return tuple(uid for _, _, uid in ranked[:max_flagged])

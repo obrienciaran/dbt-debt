@@ -17,6 +17,7 @@ from dbt_debt.report.scorecard import (
     RarelyUsedModel,
     Scorecard,
     StaleSource,
+    UnpartitionedTable,
     UnusedSource,
 )
 from dbt_debt.verdict.coverage import Coverage
@@ -174,7 +175,7 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
             "",
             f"Top {len(shown_rare)} of {total} rarely used models "
             f"(at most {scorecard.rare_threshold} queries in {scorecard.lookback_days} days; "
-            "largest first):",
+            "most bytes scanned first):",
         ]
         lines += [f"  {i}. {_format_rare(m)}" for i, m in enumerate(shown_rare, start=1)]
 
@@ -183,11 +184,10 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
         lines += [
             "",
             f"Large tables with neither partition_by nor cluster_by ({count}; every query "
-            "scans them in full):",
+            "scans them in full, most bytes scanned first):",
         ]
         for table in scorecard.unpartitioned_tables:
-            size = humanize_bytes(table.total_bytes)
-            lines.append(f"  - {table.name} ({size}, {table.materialized})")
+            lines.append(f"  - {_format_unpartitioned(table)}")
 
     if detail:
         lines += _detail_section(scorecard)
@@ -232,8 +232,7 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
         lines += ["", f"Large tables with neither partition_by nor cluster_by ({count}):"]
         for table in scorecard.unpartitioned_tables:
             path = f"  {table.file_path}" if table.file_path else ""
-            size = humanize_bytes(table.total_bytes)
-            lines.append(f"  - {table.name} ({size}, {table.materialized}){path}")
+            lines.append(f"  - {_format_unpartitioned(table)}{path}")
     columns = scorecard.columns
     if columns is not None:
         lines += _detail_columns(columns.dead_columns)
@@ -302,6 +301,8 @@ def _detail_unused_sources(sources: tuple[UnusedSource, ...]) -> list[str]:
             evidence = [f"{count} query" if count == 1 else f"{count} queries"]
             if source.last_queried:
                 evidence.append(f"last {source.last_queried[:10]}")
+            if source.bytes_scanned > 0:
+                evidence.append(f"{humanize_bytes(source.bytes_scanned)} scanned")
             usage = f"  (queried directly: {', '.join(evidence)})"
         else:
             usage = "  (no queries seen)"
@@ -443,7 +444,11 @@ def _format_model(model: DeadModel) -> str:
 
 
 def _format_rare(model: RarelyUsedModel) -> str:
-    """`name (2 queries, last 2026-06-14, 1.2 GB)` — the evidence an owner needs to judge it."""
+    """`name (2 queries, last 2026-06-14, 1.2 GB, 3.4 GB scanned)` — the evidence an owner needs.
+
+    The scanned figure is what the few queries read over the window: large against a small
+    query count is the "expensive but rarely used" deprecation argument.
+    """
 
     count = model.query_count
     parts = [f"{count} query" if count == 1 else f"{count} queries"]
@@ -451,8 +456,19 @@ def _format_rare(model: RarelyUsedModel) -> str:
         parts.append(f"last {model.last_queried[:10]}")
     if model.total_bytes > 0:
         parts.append(humanize_bytes(model.total_bytes))
+    if model.bytes_scanned > 0:
+        parts.append(f"{humanize_bytes(model.bytes_scanned)} scanned")
     kind = f" ({model.resource_type})" if model.resource_type != "model" else ""
     return f"{model.name}{kind} ({', '.join(parts)})"
+
+
+def _format_unpartitioned(table: UnpartitionedTable) -> str:
+    """`name (12.0 GB, table, 3.4 GB scanned)`; the scanned part is dropped when nothing read it."""
+
+    parts = [humanize_bytes(table.total_bytes), table.materialized]
+    if table.bytes_scanned > 0:
+        parts.append(f"{humanize_bytes(table.bytes_scanned)} scanned")
+    return f"{table.name} ({', '.join(parts)})"
 
 
 def _format_column(column: DeadColumn) -> str:

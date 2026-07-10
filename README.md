@@ -65,8 +65,10 @@ up to 365 there.
   are checked the same way and tagged `(seed)` / `(snapshot)` in the lists.
 - **rarely used models.** A model that was queried, but at most 5 times in the whole window
   (`--rare-threshold`; `0` turns the band off). These still count as used. Each is listed with its
-  query count, last-queried date, and size so an owner can judge whether those few queries still
-  earn its keep. They never feed the removable or reclaimable figures.
+  query count, last-queried date, size, and how many bytes those few queries scanned, so an owner
+  can judge whether they still earn the model's keep. The list puts the most-scanned model first:
+  a big scanned figure against a tiny query count means the model is expensive *and* barely used,
+  the strongest case for deprecating it. They never feed the removable or reclaimable figures.
 - **too new to judge.** A model whose table first appeared in the query log fewer than 7 days ago
   (`--min-age-days`) hasn't had a fair chance to be queried yet, so it's listed separately instead
   of being called unused. This guard only applies to the things dbt builds, i.e. models, seeds,
@@ -105,8 +107,9 @@ up to 365 there.
   so it needs no extra warehouse permission and shows up even if it can't list the warehouse tables.
 - **sources declared but never read.** The reverse case. A source sits in a `sources.yml` but no
   model, exposure, or semantic-layer consumer references it. Each one is listed with its file path
-  and any queries people ran against the raw table directly, so you can tell a dead declaration
-  (delete the entry) from a table your team reads outside dbt (consider modelling it). A test on
+  and any queries people ran against the raw table directly (count, last date, and bytes scanned),
+  so you can tell a dead declaration (delete the entry) from a table your team reads outside dbt
+  (consider modelling it). A test on
   the source doesn't count as use, since a test guards data without consuming it. This is a review
   list and never feeds the unused-model figures.
 - **stale sources.** A declared source whose table has received no new data for more than 30 days
@@ -123,8 +126,10 @@ up to 365 there.
   `catalog.json` when it's present (and says so), else the ones declared in YAML.
 - **large tables without partitioning or clustering (BigQuery only).** A table or incremental
   model of 1 GB or more built with neither `partition_by` nor `cluster_by` in its config gets a
-  full scan from every query that touches it. The largest offenders (up to 20) are listed by
-  stored size. Skipped on Snowflake, which micro-partitions automatically.
+  full scan from every query that touches it. The offenders (up to 20) are listed with their
+  stored size and how many bytes user queries scanned from them over the window, most scanned
+  first, so the top entry is the partitioning fix that saves the most. Skipped on Snowflake,
+  which micro-partitions automatically.
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage you'd
   reclaim. A single column can't be sized (BigQuery doesn't report storage per column), so columns
   rank by their table's size instead.

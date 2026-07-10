@@ -216,7 +216,7 @@ def test_rarely_used_band_reports_usage_and_bytes_without_touching_unused_figure
     from datetime import datetime, timezone
 
     when = datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc)
-    usage = [UsageRow(relation_key=FCT_KEY, query_count=2, last_queried=when)]
+    usage = [UsageRow(relation_key=FCT_KEY, query_count=2, last_queried=when, bytes_scanned=4096)]
     storage = {FCT_KEY: 2048}
     card = build_scorecard(manifest, graph, usage, storage, _config())
 
@@ -228,8 +228,23 @@ def test_rarely_used_band_reports_usage_and_bytes_without_touching_unused_figure
         ("fct_orders", 2, 2048)
     ]
     assert card.rarely_used[0].last_queried == when.isoformat()
+    assert card.rarely_used[0].bytes_scanned == 4096
     assert card.removable_tests == ()
     assert card.reclaimable_bytes == 0
+
+
+def test_rare_band_ranks_by_scanned_bytes_before_stored_size() -> None:
+    # stg is smaller on disk but its few queries scanned more, so it outranks fct — the
+    # "expensive but rarely used" model belongs at the top of the review band.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    usage = [
+        UsageRow(relation_key=FCT_KEY, query_count=2, bytes_scanned=1024),
+        UsageRow(relation_key=STG_KEY, query_count=3, bytes_scanned=8192),
+    ]
+    storage = {FCT_KEY: 4096, STG_KEY: 512}
+    card = build_scorecard(manifest, graph, usage, storage, _config())
+    assert [r.name for r in card.rarely_used] == ["stg_orders", "fct_orders"]
 
 
 def test_rare_threshold_zero_disables_the_band() -> None:
@@ -295,6 +310,7 @@ def test_partitioning_check_is_bigquery_only() -> None:
     card = build_scorecard(manifest, graph, [], storage, _config())
     assert [t.name for t in card.unpartitioned_tables] == ["fct_orders"]
     assert card.unpartitioned_tables[0].total_bytes == 5 * 1024**3
+    assert card.unpartitioned_tables[0].bytes_scanned == 0
 
     snowflake = Config(
         project_dir=FIXTURE.parent.parent,
@@ -302,6 +318,21 @@ def test_partitioning_check_is_bigquery_only() -> None:
         warehouse="snowflake",
     )
     assert build_scorecard(manifest, graph, [], storage, snowflake).unpartitioned_tables == ()
+
+
+def test_partitioning_check_ranks_by_scanned_bytes_from_the_usage_rows() -> None:
+    # stg stores less than fct but user queries scanned it far more, so it tops the list —
+    # partitioning it saves the most. The bytes carried on each entry come from the same rows.
+    manifest = load_manifest(FIXTURE)
+    for model in manifest.models.values():
+        model.materialized = "table"
+    graph = Graph.from_manifest(manifest)
+    storage = {FCT_KEY: 5 * 1024**3, STG_KEY: 2 * 1024**3}
+    usage = [UsageRow(relation_key=STG_KEY, query_count=40, bytes_scanned=80 * 1024**3)]
+
+    card = build_scorecard(manifest, graph, usage, storage, _config())
+    assert [t.name for t in card.unpartitioned_tables] == ["stg_orders", "fct_orders"]
+    assert card.unpartitioned_tables[0].bytes_scanned == 80 * 1024**3
 
 
 def test_infer_database_from_model_database() -> None:
@@ -324,7 +355,7 @@ def test_unused_declared_source_carries_direct_query_evidence() -> None:
     last = datetime(2026, 6, 1, tzinfo=timezone.utc)
     usage = [
         UsageRow(relation_key=FCT_KEY, query_count=4),
-        UsageRow(relation_key=SOURCE_KEY, query_count=2, last_queried=last),
+        UsageRow(relation_key=SOURCE_KEY, query_count=2, last_queried=last, bytes_scanned=1024),
     ]
     card = build_scorecard(manifest, graph, usage, {}, _config())
 
@@ -333,6 +364,7 @@ def test_unused_declared_source_carries_direct_query_evidence() -> None:
     assert source.name == "raw.orders"
     assert source.relation_key == SOURCE_KEY
     assert (source.query_count, source.last_queried) == (2, last.isoformat())
+    assert source.bytes_scanned == 1024
     assert source.file_path == "models/staging/sources.yml"
 
 

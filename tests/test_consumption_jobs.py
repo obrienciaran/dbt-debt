@@ -29,6 +29,7 @@ def test_usage_query_shape() -> None:
     assert "INTERVAL 90 DAY" in sql
     assert "statement_type = 'SELECT'" in sql
     assert "NOT REGEXP_CONTAINS(query" in sql
+    assert "COALESCE(SUM(total_bytes_processed), 0) AS bytes_scanned" in sql
 
 
 def test_query_text_query_shape() -> None:
@@ -66,11 +67,25 @@ def test_exclusion_clause_rejects_patterns_that_break_the_sql_string() -> None:
 
 def test_parse_usage_rows() -> None:
     when = datetime(2026, 6, 1)
-    rows = [{"relation_key": "P.D.T", "query_count": 5, "last_queried": when}]
+    rows = [
+        {"relation_key": "P.D.T", "query_count": 5, "last_queried": when, "bytes_scanned": 2048}
+    ]
     parsed = parse_usage_rows(rows)
     assert parsed[0].relation_key == "p.d.t"
     assert parsed[0].query_count == 5
     assert parsed[0].last_queried == when
+    assert parsed[0].bytes_scanned == 2048
+
+
+def test_parse_usage_rows_tolerates_absent_or_null_bytes() -> None:
+    # Rows cached before the bytes column existed have no key; a NULL sum can also slip
+    # through. Either reads as 0 rather than failing the scan.
+    when = datetime(2026, 6, 1)
+    rows = [
+        {"relation_key": "p.d.old", "query_count": 1, "last_queried": when},
+        {"relation_key": "p.d.null", "query_count": 1, "last_queried": when, "bytes_scanned": None},
+    ]
+    assert [row.bytes_scanned for row in parse_usage_rows(rows)] == [0, 0]
 
 
 def test_existing_relations_query_shape() -> None:

@@ -34,6 +34,7 @@ def test_usage_query_reads_access_history_not_query_text() -> None:
     assert "qh.execution_status = 'SUCCESS'" in sql
     assert "REGEXP_COUNT(qh.query_text" in sql
     assert "'Table', 'View', 'Materialized view'" in sql
+    assert "COALESCE(SUM(qh.bytes_scanned), 0) AS bytes_scanned" in sql
 
 
 def test_query_text_query_aliases_to_the_shared_parser_name() -> None:

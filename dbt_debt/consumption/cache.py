@@ -65,6 +65,7 @@ def _usage_to_json(rows: list[UsageRow]) -> list[dict[str, Any]]:
             "relation_key": row.relation_key,
             "query_count": row.query_count,
             "last_queried": row.last_queried.isoformat() if row.last_queried else None,
+            "bytes_scanned": row.bytes_scanned,
         }
         for row in rows
     ]
@@ -78,6 +79,8 @@ def _usage_from_json(data: list[dict[str, Any]]) -> list[UsageRow]:
             last_queried=datetime.fromisoformat(row["last_queried"])
             if row["last_queried"]
             else None,
+            # Entries written before bytes were collected have no key; read them as 0.
+            bytes_scanned=row.get("bytes_scanned", 0),
         )
         for row in data
     ]

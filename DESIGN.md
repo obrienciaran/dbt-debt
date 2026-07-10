@@ -79,6 +79,7 @@ settings ─┐
           │     • which tables were queried (in the window, dbt's own queries removed)
           │     • the query text (only when checking columns)
           │     • the list of tables in the dbt-managed datasets (only when finding orphans)
+          │     • each table's live storage bytes (Snowflake only; elsewhere sizes come from catalog.json)
           │     • when each source table last received data (only for the stale-source check)
           ├─> lineage (column check): which column feeds which
           ├─> references: which tables each model reads
@@ -174,6 +175,17 @@ The design decisions, and what remains to confirm:
   The pattern sits in a `$$...$$` dollar-quoted string (Snowflake's no-escape literal) inside
   `REGEXP_COUNT(...) = 0`, because Snowflake's `REGEXP_LIKE` anchors to the whole string.
   *Confirmed live:* dbt's builds are correctly excluded from usage counts.
+- **Table sizes come live from `ACCOUNT_USAGE.TABLE_STORAGE_METRICS`** (same grant as the rest
+  of ACCOUNT_USAGE, so no new permission), replacing the catalog sizes where a row exists —
+  warehouse truth with no `dbt docs generate` needed. Each relation's active bytes drive the
+  size and reclaimable figures; the time-travel and fail-safe bytes still billed for it are
+  summed over every incarnation, dropped ones included, and shown next to each unused table.
+  Reported as bytes rather than dollars, since storage rates vary by contract and region.
+  Validated live: the
+  per-relation sums match the account, and two caveats surfaced. dbt builds transient tables
+  on Snowflake by default, which keep no fail-safe copies, so those figures are often zero;
+  and the view lags like the rest of ACCOUNT_USAGE, so a brand-new table falls back to its
+  catalog size until a row appears.
 - **Orphans** read one `<database>.INFORMATION_SCHEMA.TABLES` filtered by lowercased schema name.
   This is one query, unlike BigQuery's per-dataset union, because Snowflake's information schema
   spans the database. Snowflake's uppercase identifiers normalize away because every relation
@@ -201,14 +213,15 @@ cost no extra warehouse call. They are reported as bytes, never dollars: bytes m
 money only on BigQuery on-demand pricing, and any dollar figure would be a guess. A query
 touching several tables attributes its whole figure to each, so the numbers rank tables rather
 than bill them, and they are a review signal only — no usage verdict ever depends on them. The
-same figure backs the direct-query evidence on unused declared sources. The signal is validated
+same figure backs the direct-query evidence on unused declared sources and on orphaned
+relations: each orphan carries any query count, last-queried date, and scanned bytes from the
+same usage rows, and the still-queried ones — the dangerous-to-drop ones — rank first. The
+signal is validated
 live on both warehouses: the rare band's counts, dates, and scanned bytes match the queries run
 against the demos, and the ranking follows bytes rather than query count. One trap the live run
 surfaced: a query run in a different GCP project than the scan targets never appears in that
 project's `INFORMATION_SCHEMA.JOBS`, which is exactly the project-scoping the up-front
-permission check exists for. Orphaned relations
-carry no usage evidence at all today; attaching it (an orphan still queried directly is
-dangerous to drop) is a possible follow-up, not part of this.
+permission check exists for.
 
 Three hygiene stats ride along, all computed from dbt's own files with no warehouse call.
 `verdict/coverage.py` counts models with at least one test and models and columns with
@@ -265,7 +278,9 @@ builds nor reads. To see what's actually there, we ask each of those datasets fo
 list and stack the lists together. We use the per-dataset lists because they need only read
 access to that dataset, while the one region-wide list needs a stronger, project-wide grant
 that even an Owner can be refused (confirmed live on BigQuery). If we can't read the lists, we
-skip this finding with a warning and the scan still succeeds.
+skip this finding with a warning and the scan still succeeds. The usage rows already fetched
+attach direct-query evidence to each orphan, as on unused sources: a queried orphan is still
+read directly and is dangerous to drop, so the still-queried ones rank first.
 
 An **undeclared source** is a table a model reads from that dbt has no record of. It should be
 declared as a `source()`. We find these by reading the model's own SQL (`references.py`), so

@@ -97,7 +97,8 @@ to 365 there.
 - **tables with no dbt model behind them (orphans).** A real table or view in a dataset dbt
   builds into, but with no dbt record, usually left over from a renamed or deleted model, or
   made by hand. Only datasets dbt builds into are searched, so raw input tables are never
-  flagged.
+  flagged. Each is listed with any direct queries people ran against it (count, last date,
+  bytes scanned); a queried orphan is still in use and dangerous to drop, so those come first.
 - **tables your models read but dbt was never told about.** A model reads a table you never
   declared; add it as a `source()`. Found by reading the model's SQL, so it needs no extra
   warehouse permission.
@@ -126,8 +127,10 @@ to 365 there.
   partitioning fix that saves the most. Skipped on Snowflake, which micro-partitions
   automatically.
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage
-  you'd reclaim. Columns can't be sized (neither BigQuery nor Snowflake reports storage per
-  column), so they rank by their table's size.
+  you'd reclaim; on Snowflake the sizes come live from the warehouse (no `dbt docs generate`
+  needed) and include the time-travel and fail-safe copies still billed for it. Columns can't
+  be sized (neither BigQuery nor Snowflake reports storage per column), so they rank by their
+  table's size.
 
 ## 📦 Installing it
 

@@ -33,7 +33,9 @@ dbt keeps a record of every table it builds and every table it reads. Comparing 
 against the warehouse and against your own project flags four kinds of gap:
 
 - An **orphan** exists in a dataset dbt builds into, but dbt has no record of it. Usually a
-  leftover from a renamed or deleted model, or a table made by hand.
+  leftover from a renamed or deleted model, or a table made by hand. The report shows any
+  queries people ran against it directly; a queried orphan is still in use and dangerous to
+  drop, so those are listed first.
 - An **undeclared source** is a table a model reads that dbt was never told about, so it sits
   outside the DAG, untracked and untested. Declare it in a `sources.yml` and reference it with
   `{{ source() }}`.
@@ -126,8 +128,9 @@ in the project your models live in (read from your project, or set with `--proje
   last-data date is read from dataset metadata. Without it, the stale-source check is skipped
   with a warning.
 
-That required grant is the only one. Table sizes (used to rank unused tables) come from
-`catalog.json`, which `dbt docs generate` already fills in, so they need no extra access.
+That required grant is the only one. On BigQuery, table sizes (used to rank unused tables)
+come from `catalog.json`, which `dbt docs generate` already fills in, so they need no extra
+access.
 
 ### Snowflake
 
@@ -185,6 +188,12 @@ setup is done once:
 The stale-source check needs no extra grant on Snowflake: it reads `ACCOUNT_USAGE.TABLES`,
 already required for the "too new" guard. One caveat: its `last_altered` date also moves on DDL
 changes (even a table comment), so a stale table can occasionally look fresher than its data.
+
+Table sizes need no extra grant either: they come live from
+`ACCOUNT_USAGE.TABLE_STORAGE_METRICS`, so no `dbt docs generate` is needed for them. Each
+unused table also shows the time-travel and fail-safe copies Snowflake still bills for it, as
+bytes rather than dollars, since storage rates vary by contract. dbt builds transient
+tables by default, which keep no fail-safe copies, so those figures are often zero.
 
 **Two timing notes.** `ACCOUNT_USAGE` views lag reality; Snowflake documents 90 minutes for
 `TABLES` and 3 hours for `ACCESS_HISTORY` (both approximate; in practice often much less).

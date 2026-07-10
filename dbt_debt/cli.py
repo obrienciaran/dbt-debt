@@ -195,11 +195,11 @@ def _column_report(
         return None
 
     schema = build_schema(catalog.relation_columns())
-    consumed = consumed_model_columns(
+    consumption = consumed_model_columns(
         client.query_texts(), schema, manifest.relation_to_id(), dialect=config.dialect
     )
     edges = SqlglotLineage(manifest, catalog, dialect=config.dialect, schema=schema).edges()
-    return build_column_report(manifest, catalog, consumed, edges, storage)
+    return build_column_report(manifest, catalog, consumption, edges, storage)
 
 
 def _existing_relations(

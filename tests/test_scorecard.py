@@ -124,6 +124,72 @@ def test_min_age_zero_disables_the_guard() -> None:
     assert card.unused_models == 3
 
 
+def test_snowflake_dead_node_without_first_seen_is_set_aside() -> None:
+    # ACCOUNT_USAGE.TABLES lags (~90 minutes), so on Snowflake a dead node with no first-seen
+    # row cannot prove its age — it is likely a new table, not an unused one.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    first_seen = {STG_KEY: now - timedelta(days=170), SEED_KEY: now - timedelta(days=170)}
+    storage = {STG_KEY: 1024, FCT_KEY: 2048, SEED_KEY: 512}
+    config = Config(
+        project_dir=FIXTURE.parent.parent, target_path=FIXTURE.parent.name, warehouse="snowflake"
+    )
+    card = build_scorecard(manifest, graph, [], storage, config, first_seen=first_seen, now=now)
+
+    assert [m.name for m in card.missing_first_seen] == ["fct_orders"]
+    assert (card.active_models, card.unused_models) == (0, 2)
+    # Everything derived from "unused" excludes the set-aside node, exactly like too-new.
+    assert card.removable_tests == ()
+    assert card.affected_exposures == ()
+    assert card.reclaimable_bytes == 1536
+    assert [m.name for m in card.dead_models] == ["stg_orders", "country_codes"]
+
+
+def test_bigquery_dead_node_without_first_seen_is_judged_unused() -> None:
+    # On BigQuery a missing first-seen means zero jobs in the whole lookback window — the
+    # strongest unused signal there is — so nothing is set aside.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    first_seen = {STG_KEY: now - timedelta(days=170), SEED_KEY: now - timedelta(days=170)}
+    card = build_scorecard(manifest, graph, [], {}, _config(), first_seen=first_seen, now=now)
+
+    assert card.missing_first_seen == ()
+    assert card.unused_models == 3
+
+
+def test_min_age_zero_disables_the_missing_first_seen_guard_too() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    config = Config(
+        project_dir=FIXTURE.parent.parent,
+        target_path=FIXTURE.parent.name,
+        warehouse="snowflake",
+        min_age_days=0,
+    )
+    card = build_scorecard(manifest, graph, [], {}, config, first_seen={}, now=now)
+    assert card.missing_first_seen == ()
+    assert card.unused_models == 3
+
+
+def test_snowflake_rare_node_without_first_seen_leaves_the_band() -> None:
+    # The rare band gets the same protection: a queried node whose TABLES row has not landed
+    # yet cannot prove it had a full window to accumulate queries.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    usage = [UsageRow(relation_key=FCT_KEY, query_count=2)]
+    config = Config(
+        project_dir=FIXTURE.parent.parent, target_path=FIXTURE.parent.name, warehouse="snowflake"
+    )
+    card = build_scorecard(manifest, graph, usage, {}, config, first_seen={}, now=now)
+    assert card.rarely_used == ()
+    # A queried node is alive, so it never lands in the missing-first-seen review list either.
+    assert card.missing_first_seen == ()
+
+
 def test_dead_model_flags_its_semantic_consumers() -> None:
     from dbt_debt.domain import SemanticConsumer
 

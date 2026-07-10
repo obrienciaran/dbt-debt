@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from dbt_debt.artifacts.catalog import Catalog
 from dbt_debt.artifacts.graph import Graph
 from dbt_debt.config import Config
+from dbt_debt.consumption.columns import ColumnConsumption
 from dbt_debt.consumption.usage import first_seen_model_ids, model_usage, queried_model_ids
 from dbt_debt.domain import (
     ColumnEdge,
@@ -28,7 +29,7 @@ from dbt_debt.verdict.columns import dead_columns
 from dbt_debt.verdict.coverage import Coverage, coverage
 from dbt_debt.verdict.drift import phantom_columns
 from dbt_debt.verdict.exposures import affected_exposures, dead_exposures, unaffected_exposures
-from dbt_debt.verdict.freshness import too_new_models
+from dbt_debt.verdict.freshness import missing_first_seen_models, too_new_models
 from dbt_debt.verdict.models import dead_models
 from dbt_debt.verdict.orphans import orphaned_relations, undeclared_sources
 from dbt_debt.verdict.partitioning import unpartitioned_large_tables
@@ -179,6 +180,11 @@ class ColumnReport:
     unused: int
     removable: int
     dead_columns: tuple[DeadColumn, ...] = field(default_factory=tuple)
+    parsed_queries: int = 0
+    """How many query texts sqlglot parsed — with `unparseable_queries`, the confidence figure."""
+    unparseable_queries: int = 0
+    """Query texts sqlglot could not parse; their column reads are invisible to the verdicts.
+    Never affects usage verdicts, which do not come from query text."""
 
 
 @dataclass(frozen=True)
@@ -218,6 +224,9 @@ class Scorecard:
     dead_models: tuple[DeadModel, ...] = field(default_factory=tuple)
     too_new_models: tuple[DeadModel, ...] = ()
     """Unqueried but first seen too recently to judge — a third bucket, not counted unused."""
+    missing_first_seen: tuple[DeadModel, ...] = ()
+    """Snowflake only: unqueried nodes with no first-seen date yet (ACCOUNT_USAGE.TABLES lags,
+    so these are likely new tables) — set aside like the too-new bucket, not counted unused."""
     rarely_used: tuple[RarelyUsedModel, ...] = ()
     """Queried at most `rare_threshold` times — a review band, never counted unused."""
     rare_threshold: int = 0
@@ -263,7 +272,9 @@ def build_scorecard(
     `first_seen` (relation_key -> earliest job) drives the too-new guard: an unqueried node
     younger than `config.min_age_days` is set aside as "too new to judge" and excluded from
     every unused-derived figure — the count, the removable tests, the exposure and semantic
-    impact, and the reclaimable bytes. Queried nodes with at most `config.rare_threshold`
+    impact, and the reclaimable bytes. On Snowflake an unqueried node with no first-seen date
+    at all is set aside the same way (as "missing first-seen date — likely a new table"), since
+    ACCOUNT_USAGE.TABLES lags behind reality. Queried nodes with at most `config.rare_threshold`
     queries land in the separate rarely-used review band, which feeds none of those figures
     either. `now` is injectable for tests.
     """
@@ -275,13 +286,23 @@ def build_scorecard(
     now_utc = now or datetime.now(timezone.utc)
     min_age = timedelta(days=config.min_age_days)
     too_new = too_new_models(unqueried, first_seen_ids, now_utc, min_age)
-    dead = unqueried - too_new
+
+    # On Snowflake, first-seen comes from ACCOUNT_USAGE.TABLES, which lags (~90 minutes): a
+    # dead node with no row yet cannot prove its age, so it is set aside as a likely new table
+    # rather than judged. On BigQuery a missing first-seen means zero jobs all window — the
+    # strongest unused signal — so those are judged normally.
+    missing: set[str] = set()
+    if config.warehouse == "snowflake" and min_age > timedelta(0):
+        missing = missing_first_seen_models(unqueried, first_seen_ids)
+    dead = unqueried - too_new - missing
 
     # The rarity band gets the same too-new protection as the dead set: a model created
     # mid-window has not had a full window to accumulate queries.
     usage_by_model = model_usage(manifest, usage_rows)
     rare = rarely_used_models(usage_by_model, config.rare_threshold)
     rare -= too_new_models(rare, first_seen_ids, now_utc, min_age)
+    if config.warehouse == "snowflake" and min_age > timedelta(0):
+        rare -= missing_first_seen_models(rare, first_seen_ids)
 
     # When the column stage ran, tests guarding a dead column are removable too — rebuild the
     # (model, column) refs the tests verdict compares against from the ranked dead list.
@@ -416,6 +437,7 @@ def build_scorecard(
         ),
         dead_models=ranked_assets(dead),
         too_new_models=ranked_assets(too_new),
+        missing_first_seen=ranked_assets(missing),
         rarely_used=ranked_rarely_used(rare),
         rare_threshold=config.rare_threshold,
         reclaimable_bytes=reclaimable,
@@ -434,7 +456,7 @@ def build_scorecard(
 def build_column_report(
     manifest: Manifest,
     catalog: Catalog,
-    consumed: Set[ColumnRef],
+    consumption: ColumnConsumption,
     edges: Iterable[ColumnEdge],
     storage_bytes: Mapping[str, int],
 ) -> ColumnReport:
@@ -443,7 +465,8 @@ def build_column_report(
     `removable` softens "dead" with the manifest blocker check — a dead column backing a test or
     bound by an enforced contract is *not* trivially removable. Dead columns are ranked by their
     owning model's storage, the best available proxy (BigQuery has no per-column bytes). The whole
-    ranked list is kept; the renderer decides how much to show.
+    ranked list is kept; the renderer decides how much to show. `consumption` carries the parse
+    counts alongside the consumed set, so the report can state how much query text the verdicts saw.
     """
 
     all_columns = {
@@ -451,7 +474,7 @@ def build_column_report(
         for unique_id in manifest.models
         for column in catalog.model_columns(unique_id)
     }
-    dead = dead_columns(all_columns, consumed, edges)
+    dead = dead_columns(all_columns, consumption.consumed, edges)
     blockers = {(b.model_unique_id, b.column_name): b for b in analyze_columns(manifest, dead)}
     removable = sum(1 for ref in dead if not blockers[ref].is_blocked)
 
@@ -475,6 +498,8 @@ def build_column_report(
         unused=len(dead),
         removable=removable,
         dead_columns=ranked_dead,
+        parsed_queries=consumption.parsed,
+        unparseable_queries=consumption.unparseable,
     )
 
 

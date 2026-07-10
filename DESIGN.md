@@ -136,8 +136,10 @@ Confirmed against live data so far: the ACCESS_HISTORY flatten and QUERY_HISTORY
 exact per-relation query counts, the dbt query-comment exclusion holds (builds do not count as
 use), orphan discovery finds hand-made tables through the case normalization, the
 first-seen/too-new guard behaves as designed (see the first-seen bullet), and the scan exits 0
-end to end. One check is open. Reclaimable-bytes figures did not appear on Snowflake, and it is
-unverified whether dbt-snowflake's `catalog.json` stats use a different key than we read.
+end to end. The missing reclaimable-bytes figures from that first run are explained and fixed:
+dbt-snowflake writes the table size under the `bytes` stats key ("Approximate Size"), not
+BigQuery's `num_bytes` — the catalog reader checks both (views carry no stats and report 0),
+confirmed live 2026-07-10 with reclaimable-storage figures appearing on a demo scan.
 
 The design decisions, and what remains to confirm:
 
@@ -155,10 +157,13 @@ The design decisions, and what remains to confirm:
   comes from JOBS rather than TABLES. *Unverified inference:* that dropped incarnations are
   retained long enough to matter. *Confirmed live:* the guard itself. A brand-new dead model is
   set aside as too-new at the default `--min-age-days`, its test leaves the removable count, and
-  the rarely-used band empties, once `ACCOUNT_USAGE.TABLES` has a row for it. *Open design
-  question:* `ACCOUNT_USAGE.TABLES` lags further behind than ACCESS_HISTORY, so during that gap
-  a node has usage and no first-seen row, and is judged rather than set aside. Whether a
-  missing first-seen should mean too-new is undecided.
+  the rarely-used band empties, once `ACCOUNT_USAGE.TABLES` has a row for it. *Decided
+  2026-07-10:* `ACCOUNT_USAGE.TABLES` lags reality (documented 90 minutes), so on Snowflake a
+  dead node with no first-seen row cannot prove its age and is set aside as "missing a
+  first-seen date (likely a new table)" — a review list beside too-new, excluded from every
+  unused-derived figure, and the rare band gets the same protection. BigQuery is untouched:
+  there first-seen comes from JOBS, so a missing row means zero jobs all window, the strongest
+  unused signal there is.
 - **The dbt exclusion assumes dbt's query-comment lands in `query_text`** (it does on BigQuery).
   The pattern sits in a `$$...$$` dollar-quoted string (Snowflake's no-escape literal) inside
   `REGEXP_COUNT(...) = 0`, because Snowflake's `REGEXP_LIKE` anchors to the whole string.
@@ -167,8 +172,9 @@ The design decisions, and what remains to confirm:
   This is one query, unlike BigQuery's per-dataset union, because Snowflake's information schema
   spans the database. Snowflake's uppercase identifiers normalize away because every relation
   key is lowercased on both sides.
-- ACCOUNT_USAGE lags reality by up to about 45 minutes (documented; around 20 in practice).
-  Harmless for a debt scan.
+- ACCOUNT_USAGE lags reality (documented: 90 minutes for TABLES, 3 hours for ACCESS_HISTORY,
+  both approximate and often much less in practice). Harmless for a debt scan; the
+  missing-first-seen set-aside above absorbs the TABLES gap.
 - **DuckDB is deliberately unsupported.** It keeps no query history at all, so the core "unused"
   verdict has no signal to stand on, and its enterprise footprint among dbt users is small.
 

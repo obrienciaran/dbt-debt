@@ -80,11 +80,18 @@ def _parse_node(unique_id: str, node: dict[str, Any]) -> CatalogNode:
 
 
 def _stat_bytes(node: dict[str, Any]) -> int:
-    """Best-effort `num_bytes` from the node's stats; 0 when the adapter did not report it."""
+    """Best-effort byte size from the node's stats; 0 when the adapter did not report it.
 
-    stat = as_dict(as_dict(node.get("stats")).get("num_bytes"))
-    value = stat.get("value")
-    try:
-        return int(float(value)) if value is not None else 0
-    except (TypeError, ValueError):
-        return 0
+    dbt-bigquery writes the size under the `num_bytes` stats key; dbt-snowflake under `bytes`
+    ("Approximate Size"). The first key with a usable value wins.
+    """
+
+    stats = as_dict(node.get("stats"))
+    for key in ("num_bytes", "bytes"):
+        value = as_dict(stats.get(key)).get("value")
+        try:
+            if value is not None:
+                return int(float(value))
+        except (TypeError, ValueError):
+            continue
+    return 0

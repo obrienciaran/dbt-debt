@@ -72,12 +72,25 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
             f"  ? {len(scorecard.too_new_models)} too new to judge "
             "(first seen recently; not counted in 'unused')"
         )
+    if scorecard.missing_first_seen:
+        lines.append(
+            f"  ? {len(scorecard.missing_first_seen)} missing a first-seen date "
+            "(likely new tables; not counted in 'unused')"
+        )
     if columns is not None:
         lines += [
             "Columns:",
             f"  ✓ {columns.active} active",
             f"  ✗ {columns.unused} unused",
         ]
+        inspected = columns.parsed_queries + columns.unparseable_queries
+        if inspected:
+            noun = "query" if inspected == 1 else "queries"
+            lines.append(
+                f"  (column verdicts based on {_pct(columns.parsed_queries, inspected)} of "
+                f"query text — {columns.parsed_queries} of {inspected} {noun} parsed; "
+                "usage verdicts are unaffected)"
+            )
     if scorecard.unused_sources or scorecard.stale_sources:
         lines.append("Sources:")
         if scorecard.unused_sources:
@@ -202,6 +215,18 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
         for model in scorecard.too_new_models:
             path = f"  {model.file_path}" if model.file_path else ""
             lines.append(f"  - {model.name}{_kind_tag(model)}{path}")
+    if scorecard.missing_first_seen:
+        lines += [
+            "",
+            f"Missing a first-seen date — likely new tables ({len(scorecard.missing_first_seen)}):",
+        ]
+        for model in scorecard.missing_first_seen:
+            path = f"  {model.file_path}" if model.file_path else ""
+            lines.append(f"  - {model.name}{_kind_tag(model)}{path}")
+        lines.append(
+            "  (Snowflake's ACCOUNT_USAGE.TABLES lags ~90 minutes behind reality; "
+            "re-scan later to judge these)"
+        )
     if scorecard.unpartitioned_tables:
         count = len(scorecard.unpartitioned_tables)
         lines += ["", f"Large tables with neither partition_by nor cluster_by ({count}):"]

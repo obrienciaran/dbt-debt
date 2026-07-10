@@ -37,9 +37,9 @@ def test_build_column_report_counts_and_blockers() -> None:
     schema = build_schema(catalog.relation_columns())
     relation_to_id = {m.relation_key: uid for uid, m in manifest.models.items()}
 
-    consumed = consumed_model_columns([CONSUMER_QUERY], schema, relation_to_id)
+    consumption = consumed_model_columns([CONSUMER_QUERY], schema, relation_to_id)
     edges = SqlglotLineage(manifest, catalog).edges()
-    report = build_column_report(manifest, catalog, consumed, edges, STORAGE)
+    report = build_column_report(manifest, catalog, consumption, edges, STORAGE)
 
     # 5 physical columns, 3 dead (fct.amount, stg.amount, stg.status); stg.order_id stays alive
     # because consuming fct.order_id propagates up the lineage edge.
@@ -50,6 +50,19 @@ def test_build_column_report_counts_and_blockers() -> None:
     assert report.dead_columns[0].model_name == "fct_orders"
     assert report.dead_columns[0].column == "amount"
     assert report.dead_columns[0].blocked is True
+    # The parse counts flow through so the report can state its confidence.
+    assert (report.parsed_queries, report.unparseable_queries) == (1, 0)
+
+
+def test_unparseable_queries_are_counted_in_the_report() -> None:
+    manifest = load_manifest(FIXTURES / "manifest.json")
+    catalog = load_catalog(FIXTURES / "catalog.json")
+    schema = build_schema(catalog.relation_columns())
+    relation_to_id = {m.relation_key: uid for uid, m in manifest.models.items()}
+
+    consumption = consumed_model_columns([CONSUMER_QUERY, "garbage (("], schema, relation_to_id)
+    report = build_column_report(manifest, catalog, consumption, [], STORAGE)
+    assert (report.parsed_queries, report.unparseable_queries) == (1, 1)
 
 
 def test_scan_with_lineage_populates_column_section() -> None:
@@ -83,8 +96,8 @@ def test_mixed_case_column_is_not_reported_dead_when_queried() -> None:
         }
     )
     schema = build_schema(catalog.relation_columns())
-    consumed = consumed_model_columns(
+    consumption = consumed_model_columns(
         ["SELECT UserID FROM proj.mart.orders"], schema, manifest.relation_to_id()
     )
-    report = build_column_report(manifest, catalog, consumed, [], {})
+    report = build_column_report(manifest, catalog, consumption, [], {})
     assert [c.column for c in report.dead_columns] == ["amount"]

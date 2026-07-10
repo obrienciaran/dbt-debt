@@ -115,6 +115,26 @@ def test_render_text_lists_too_new_nodes_separately() -> None:
     assert "Unused models (1):" in text
 
 
+def test_render_text_lists_missing_first_seen_nodes_separately() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=2,
+        unused_models=1,
+        dead_models=(DeadModel("model.x.stg", "stg", "p.d.stg", 0),),
+        missing_first_seen=(
+            DeadModel("model.x.just_built", "just_built", "p.d.just_built", 0, "models/jb.sql"),
+        ),
+    )
+    text = render_text(card, detail=True)
+    assert "? 1 missing a first-seen date (likely new tables; not counted in 'unused')" in text
+    assert "Missing a first-seen date — likely new tables (1):" in text
+    assert "  - just_built  models/jb.sql" in text
+    assert "ACCOUNT_USAGE.TABLES lags ~90 minutes" in text
+    # The unused list stays clean of it.
+    assert "Unused models (1):" in text
+
+
 def test_render_text_lists_rarely_used_band_with_its_evidence() -> None:
     card = Scorecard(
         project_name="jaffle_shop",
@@ -242,6 +262,8 @@ def _column_card() -> Scorecard:
                     "model.p.fct_orders", "fct_orders", "amount", True, "models/fct_orders.sql"
                 ),
             ),
+            parsed_queries=183,
+            unparseable_queries=7,
         ),
     )
 
@@ -250,6 +272,11 @@ def test_render_text_with_column_section() -> None:
     out = render_text(_column_card())
     assert "Columns:" in out
     assert "  ✗ 623 unused" in out
+    # The confidence sentence states how much query text the column verdicts saw.
+    assert (
+        "  (column verdicts based on 96% of query text — 183 of 190 queries parsed; "
+        "usage verdicts are unaffected)" in out
+    )
     assert "  - 600 columns removable" in out
     # Column-grain top dead assets replace the model-grain list when columns are present.
     assert (

@@ -72,8 +72,13 @@ up to 365 there.
   of being called unused. This guard only applies to the things dbt builds, i.e. models, seeds,
   or snapshots. An orphaned table is reported regardless of its age, as it means "this table exists
   and dbt has no record of it", which is just as true on the day it was made, or a later point in time.
+  On Snowflake, a model with no first-seen date at all is set aside the same way, as "missing a
+  first-seen date (likely a new table)" — the account metadata behind the date
+  (`ACCOUNT_USAGE.TABLES`) lags about 90 minutes, so a brand-new table briefly has no age to prove.
 - **active / unused columns.** A column is **unused** if no query read it, and nothing read another
-  column built from it.
+  column built from it. Column reads come from parsing the query text, and not every query parses,
+  so the report states its confidence — e.g. "column verdicts based on 96% of query text — 183 of
+  190 queries parsed". Model-level usage never depends on parsing, so those verdicts are unaffected.
 - **columns you could remove.** Unused columns that nothing in your dbt project still depends on (no
   data test, no contract). These are suggestions rather than an automatic delete, because "unused"
   comes from the query log, which can't see everything (see *What counts as usage*). An unused

@@ -53,6 +53,57 @@ def test_column_names_are_lowercased() -> None:
     assert parse_catalog(data).model_columns("model.p.m") == ("userid", "amount")
 
 
+def test_snowflake_bytes_stat_key_is_read() -> None:
+    # dbt-snowflake records the size under `bytes` ("Approximate Size"), not BigQuery's
+    # `num_bytes` — mirrored from a real demo_snowflake catalog.json node.
+    data = {
+        "nodes": {
+            "model.medallion.mart_customer_revenue": {
+                "metadata": {"database": "DBT_DEBT_DEMO", "schema": "MEDALLION", "name": "M"},
+                "columns": {},
+                "stats": {
+                    "has_stats": {"id": "has_stats", "value": True},
+                    "bytes": {"id": "bytes", "label": "Approximate Size", "value": 1536},
+                },
+            }
+        }
+    }
+    node = parse_catalog(data).nodes["model.medallion.mart_customer_revenue"]
+    assert node.num_bytes == 1536
+
+
+def test_num_bytes_stat_key_wins_over_bytes() -> None:
+    data = {
+        "nodes": {
+            "model.p.m": {
+                "metadata": {"database": "proj", "schema": "mart", "name": "m"},
+                "columns": {},
+                "stats": {
+                    "num_bytes": {"id": "num_bytes", "value": 4096},
+                    "bytes": {"id": "bytes", "value": 1536},
+                },
+            }
+        }
+    }
+    assert parse_catalog(data).nodes["model.p.m"].num_bytes == 4096
+
+
+def test_unusable_num_bytes_falls_back_to_bytes() -> None:
+    data = {
+        "nodes": {
+            "model.p.m": {
+                "metadata": {"database": "proj", "schema": "mart", "name": "m"},
+                "columns": {},
+                "stats": {
+                    "num_bytes": {"id": "num_bytes", "value": "not a number"},
+                    "bytes": {"id": "bytes", "value": 1536},
+                },
+            }
+        }
+    }
+    assert parse_catalog(data).nodes["model.p.m"].num_bytes == 1536
+
+
 def test_malformed_catalog_raises_artifact_error_with_the_path(tmp_path: Path) -> None:
     path = tmp_path / "catalog.json"
     path.write_text("not json at all")

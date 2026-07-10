@@ -111,10 +111,12 @@ class WarehouseRelation:
 class TableStorage:
     """What one table's storage costs, split the way the warehouse bills it.
 
-    Snowflake only (`ACCOUNT_USAGE.TABLE_STORAGE_METRICS`): `active_bytes` is the live data,
-    `time_travel_bytes` and `failsafe_bytes` are the retained copies still billed after changes
-    and drops. Always bytes, never dollars — rates vary by contract and region. BigQuery has no
-    equivalent surface, so its sizes come from catalog.json alone.
+    `active_bytes` is the live data; `time_travel_bytes` and `failsafe_bytes` are the retained
+    copies still billed after changes and drops. Snowflake fills all three from
+    `ACCOUNT_USAGE.TABLE_STORAGE_METRICS`; Redshift has no retained copies, so `SVV_TABLE_INFO`
+    fills active bytes and the rest stay zero. Always bytes, never dollars — rates vary by
+    contract and region. BigQuery has no equivalent surface, so its sizes come from
+    catalog.json alone.
     """
 
     active_bytes: int

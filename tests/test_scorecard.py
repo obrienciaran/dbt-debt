@@ -159,6 +159,22 @@ def test_bigquery_dead_node_without_first_seen_is_judged_unused() -> None:
     assert card.unused_models == 3
 
 
+def test_redshift_dead_node_without_first_seen_is_judged_unused() -> None:
+    # On Redshift a missing first-seen means no jobs within the SYS views' retention — judged
+    # normally like BigQuery; the set-aside exists only for Snowflake's lagging metadata.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    first_seen = {STG_KEY: now - timedelta(days=170), SEED_KEY: now - timedelta(days=170)}
+    config = Config(
+        project_dir=FIXTURE.parent.parent, target_path=FIXTURE.parent.name, warehouse="redshift"
+    )
+    card = build_scorecard(manifest, graph, [], {}, config, first_seen=first_seen, now=now)
+
+    assert card.missing_first_seen == ()
+    assert card.unused_models == 3
+
+
 def test_min_age_zero_disables_the_missing_first_seen_guard_too() -> None:
     manifest = load_manifest(FIXTURE)
     graph = Graph.from_manifest(manifest)
@@ -501,3 +517,44 @@ def test_scan_on_bigquery_never_asks_for_storage_metrics() -> None:
     client = FakeWarehouseClient()
     _scan(_config(), client)
     assert client.calls["table_storage"] == 0
+
+
+def test_scan_on_redshift_prefers_live_storage_metrics_over_catalog_sizes() -> None:
+    # SVV_TABLE_INFO active bytes replace the catalog sizes, like Snowflake's storage
+    # metrics; Redshift has no time-travel or fail-safe retention, so those stay zero.
+    config = Config(
+        project_dir=FIXTURE.parent.parent,
+        target_path=Path(FIXTURE.parent.name),
+        warehouse="redshift",
+        min_age_days=0,
+    )
+    client = FakeWarehouseClient(
+        table_storage={
+            FCT_KEY: TableStorage(active_bytes=4096, time_travel_bytes=0, failsafe_bytes=0)
+        }
+    )
+    card = _scan(config, client)
+    assert client.calls["table_storage"] == 1
+    dead = {m.relation_key: m for m in card.dead_models}
+    assert dead[FCT_KEY].total_bytes == 4096
+    assert (dead[FCT_KEY].time_travel_bytes, dead[FCT_KEY].failsafe_bytes) == (0, 0)
+
+
+def test_scan_on_redshift_skips_the_stale_source_check_with_a_note(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Redshift exposes no last-modified metadata, so staleness is never guessed: the client
+    # is not even asked, and the skip is announced.
+    now = datetime.now(timezone.utc)
+    config = Config(
+        project_dir=FIXTURE.parent.parent,
+        target_path=Path(FIXTURE.parent.name),
+        warehouse="redshift",
+        min_age_days=0,
+    )
+    client = FakeWarehouseClient(last_modified={SOURCE_KEY: now - timedelta(days=90)})
+    card = _scan(config, client)
+    assert client.calls["source_last_modified"] == 0
+    assert card.stale_checked is False
+    assert card.stale_sources == ()
+    assert "stale-source check" in capsys.readouterr().err

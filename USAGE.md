@@ -10,8 +10,9 @@ put together, see [`DESIGN.md`](DESIGN.md).
    `--warehouse` overrides it.
 2. Ask the warehouse which tables were queried in the lookback window, ignoring dbt's own
    queries. On BigQuery this reads `INFORMATION_SCHEMA.JOBS`; on Snowflake,
-   `ACCOUNT_USAGE.ACCESS_HISTORY`. The same rows say how many bytes each query scanned, which
-   ranks the review lists by what queries actually cost. With `--columns`, also read the query
+   `ACCOUNT_USAGE.ACCESS_HISTORY`; on Redshift, `SYS_QUERY_HISTORY` joined to the scan steps
+   in `SYS_QUERY_DETAIL`. The same rows say how many bytes each query scanned, which ranks
+   the review lists by what queries actually cost. With `--columns`, also read the query
    text to see which columns were used.
 3. Trace each column back through your models' SQL, so usage flows up to the columns that fed
    it.
@@ -68,7 +69,10 @@ A few cases to keep in mind:
   marked removable.
 - **Anything used less often than the lookback window.** BigQuery keeps 180 days of history
   (the default and the max); Snowflake keeps a year, so `--lookback-days` can go to 365 there.
-  A report that runs once a year can still look unused; that needs a human call.
+  Redshift's SYS views keep much less (AWS leaves the retention unstated; the older STL views
+  keep seven days), so on Redshift the window is capped by whatever the account retains and
+  "unused" is a correspondingly weaker signal. A report that runs once a year can still look
+  unused; that needs a human call.
 - **Anything created recently.** A table first seen in the query log fewer than 7 days ago
   (`--min-age-days`) hasn't had a fair chance to be queried, so it's reported as "too new to
   judge" and left out of the removable-test and reclaimable-storage figures. On Snowflake, a
@@ -203,18 +207,55 @@ Because the table list behind the "too new" guard can lag, a dead table with no 
 yet is set aside as "missing a first-seen date (likely a new table)" rather than judged. Scan
 again later, or with `--no-cache`, and it settles into a normal verdict.
 
+### Redshift
+
+Install the optional connector (`pip install 'dbt-debt[redshift]'`) and set the connection as
+environment variables — there is no connections file:
+
+```
+export REDSHIFT_HOST=<workgroup or cluster endpoint>
+export REDSHIFT_USER=<user>
+export REDSHIFT_PASSWORD=<password>
+```
+
+`REDSHIFT_DATABASE` and `REDSHIFT_PORT` are optional; the database defaults to the one your
+models live in and the port to 5439. Serverless workgroups and provisioned clusters both work:
+the SYS system views the scan reads cover both.
+
+**What the scan needs:**
+
+- **Required.** A user who can see *everyone's* queries in the SYS query-history views: a
+  superuser (on Serverless, the namespace admin) or a user granted
+  `ALTER USER ... SYSLOG ACCESS UNRESTRICTED`. Redshift lets any user select from those views
+  but silently filters them to the user's own rows, so dbt-debt checks up front and stops
+  rather than let "unused" mean "unused by me". Usage comes from the scan-step metadata in
+  `SYS_QUERY_DETAIL` and never from parsing query text, so an unparseable query can never
+  erase evidence of use.
+- **Optional, for orphans.** USAGE on the managed schemas, to read `SVV_REDSHIFT_TABLES`.
+  Missing access skips the orphan list with a warning, as on the other warehouses.
+
+Table sizes come live from `SVV_TABLE_INFO` (1 MB blocks, reported as bytes), so no
+`dbt docs generate` is needed for them; an empty table has no SVV_TABLE_INFO row and keeps its
+catalog size. Redshift has no time-travel or fail-safe storage, so there is no retained-bytes
+breakdown, and it exposes no table last-modified metadata, so the stale-source check is
+skipped with a note. One retention caveat: the SYS views keep a bounded history (AWS leaves
+the exact figure unstated; the older STL views keep seven days), which caps both the
+effective lookback window and how far back a first-seen date can reach.
+
 ## ⚙️ Options
 
 ```
 dbt-debt scan
     --project-dir .           your dbt project folder (default: current folder)
     --target-path target      where manifest.json and catalog.json live
-    --warehouse <name>        bigquery or snowflake (default: read from the manifest)
+    --warehouse <name>        bigquery, snowflake, or redshift (default: read from the manifest)
     --project <id>            which database to query: the GCP project on BigQuery, the
-                              database on Snowflake (default: read from your models)
+                              database on Snowflake or Redshift (default: read from your models)
     --region US               which BigQuery region your query log is in (BigQuery only)
-    --connection <name>       named Snowflake connection from connections.toml (Snowflake only)
-    --lookback-days 180       how far back to look (max 180 on BigQuery, 365 on Snowflake)
+    --connection <name>       named Snowflake connection from connections.toml (Snowflake only;
+                              Redshift connects from REDSHIFT_* environment variables)
+    --lookback-days 180       how far back to look (max 180 on BigQuery, 365 on Snowflake;
+                              capped by SYS-view retention on Redshift)
     --query-comment-pattern   how to recognise dbt's own queries (a regex)
     --columns                 also check which columns are unused (default: models only)
     --min-age-days 7          tables first seen in the query log more recently than this are
@@ -246,7 +287,7 @@ interrupted with Ctrl-C.
 
 The slow part of a scan is talking to the warehouse, so the first scan saves its results to a
 small file in your temp folder. Scan again soon after and it reads that file instead of
-re-querying. Results are keyed by warehouse and query parameters, so BigQuery and Snowflake
+re-querying. Results are keyed by warehouse and query parameters, so different warehouses'
 scans never collide.
 
 Saved results count as fresh for 1 hour; after that the next scan refetches and replaces them.

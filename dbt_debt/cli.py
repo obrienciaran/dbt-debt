@@ -59,10 +59,11 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
         usage = client.table_usage()
     catalog = _load_catalog(config)
     storage = _storage_bytes(catalog)
-    # On Snowflake the live storage metrics replace the catalog sizes (warehouse truth, no
-    # `dbt docs generate` needed) and carry the time-travel/fail-safe breakdown.
+    # On Snowflake and Redshift the live storage metrics replace the catalog sizes (warehouse
+    # truth, no `dbt docs generate` needed); Snowflake's additionally carry the
+    # time-travel/fail-safe breakdown.
     table_storage: dict[str, TableStorage] = {}
-    if config.warehouse == "snowflake":
+    if config.warehouse in ("snowflake", "redshift"):
         with status("Reading storage metrics"):
             table_storage = client.table_storage()
         storage.update({key: s.active_bytes for key, s in table_storage.items()})
@@ -78,8 +79,18 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
             first_seen = client.relation_first_seen()
     last_modified: dict[str, datetime] | None = None
     if config.stale_source_days > 0 and manifest.relations:
-        with status("Checking source freshness"):
-            last_modified = _source_last_modified(client, manifest)
+        if config.warehouse == "redshift":
+            # Redshift exposes no last-data-received metadata (no `last_altered` or
+            # `__TABLES__` analogue), so staleness cannot be read, only guessed — which the
+            # check never does.
+            print(
+                "Redshift exposes no table last-modified metadata; the stale-source check is "
+                "skipped.",
+                file=sys.stderr,
+            )
+        else:
+            with status("Checking source freshness"):
+                last_modified = _source_last_modified(client, manifest)
     catalog_columns = (
         {uid: node.columns for uid, node in catalog.nodes.items()} if catalog else None
     )
@@ -174,6 +185,10 @@ def _make_client(config: Config, database: str | None) -> WarehouseClient:
         from dbt_debt.consumption.snowflake import RealSnowflakeClient
 
         return RealSnowflakeClient(config, database=database)
+    if config.warehouse == "redshift":
+        from dbt_debt.consumption.redshift import RealRedshiftClient
+
+        return RealRedshiftClient(config, database=database)
     from dbt_debt.consumption.bigquery import RealBigQueryClient
 
     return RealBigQueryClient(config, project=database)
@@ -456,7 +471,8 @@ def _should_view(config: Config, args: argparse.Namespace) -> bool:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dbt-debt",
-        description="A technical-debt scorecard for dbt projects on BigQuery and Snowflake.",
+        description="A technical-debt scorecard for dbt projects on BigQuery, Snowflake, and "
+        "Redshift.",
     )
     # A distinct dest from scan's own --clear-cache: argparse lets a subparser's defaults
     # overwrite values the top-level parser already set, so sharing one dest would make
@@ -485,7 +501,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--project",
         default=None,
         help="Warehouse database to query — the GCP project on BigQuery, the database on "
-        "Snowflake (default: inferred from the models' database).",
+        "Snowflake and Redshift (default: inferred from the models' database).",
     )
     scan.add_argument(
         "--region", default=None, help="BigQuery region for INFORMATION_SCHEMA (default: US)."

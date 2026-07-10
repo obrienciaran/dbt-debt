@@ -74,8 +74,9 @@ class WarehouseClient(Protocol):
         """relation_key -> live active/time-travel/fail-safe bytes, for storage-debt figures.
 
         Snowflake reads `ACCOUNT_USAGE.TABLE_STORAGE_METRICS` (covered by the same grant as
-        the usage preflight); BigQuery has no equivalent surface and returns an empty dict,
-        so its sizes come from catalog.json alone.
+        the usage preflight); Redshift reads `SVV_TABLE_INFO` (active bytes only); BigQuery
+        has no equivalent surface and returns an empty dict, so its sizes come from
+        catalog.json alone.
         """
         ...
 
@@ -85,5 +86,7 @@ class WarehouseClient(Protocol):
         `datasets` are `database.schema` keys of the declared sources. Raises
         `MissingPermissionError` when the metadata cannot be read (on BigQuery this needs
         read access to the source datasets); returns an empty dict when `datasets` is empty.
+        Redshift has no such metadata and always returns an empty dict; the CLI skips the
+        check there without calling this.
         """
         ...

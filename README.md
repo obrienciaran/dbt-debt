@@ -1,9 +1,9 @@
 # 🧹 dbt-debt
 
-dbt-debt finds the dead weight in a dbt project on BigQuery or Snowflake: which models and
-columns nobody uses anymore, which are barely used, which are safe to remove, and which tables
-exist in your warehouse with no dbt model behind them. (For Snowflake's install extra,
-connection setup, and permissions, see [`USAGE.md`](USAGE.md).)
+dbt-debt finds the dead weight in a dbt project on BigQuery, Snowflake, or Redshift: which
+models and columns nobody uses anymore, which are barely used, which are safe to remove, and
+which tables exist in your warehouse with no dbt model behind them. (For the Snowflake and
+Redshift install extras, connection setup, and permissions, see [`USAGE.md`](USAGE.md).)
 
 It works by comparing your dbt project against two things the warehouse already knows: a log of
 every query that has run, and a list of the tables that actually exist. There's no account to
@@ -58,7 +58,10 @@ Top 3 of 3 unused columns (ranked by table bytes; BigQuery has no per-column siz
 A **model** is one of your `.sql` files. A **column** is one field in the table that model builds.
 The **lookback window** is how far back we read the warehouse's query log: 180 days by default,
 which is also the most BigQuery keeps. Snowflake keeps a year, so `--lookback-days` can go up
-to 365 there.
+to 365 there. Redshift's SYS query-history views keep much less (AWS leaves the exact
+retention unstated; the older STL views keep seven days), so on Redshift the effective window
+is however much history the account actually retains — "unused" there means "unused within
+that history".
 
 - **active / unused models.** A model is **unused** if, in the window, nothing queried it and
   nothing queried anything built from it. Everything else is **active**. Seeds and snapshots are
@@ -115,7 +118,8 @@ to 365 there.
   dbt has stopped. The date comes from warehouse metadata. BigQuery needs read access to the
   source datasets (skipped with a warning without it); Snowflake needs no extra grant. On
   Snowflake the date also moves on DDL changes (even a table comment), so a stale table can
-  occasionally look fresher than its data.
+  occasionally look fresher than its data. Redshift exposes no last-modified metadata at all,
+  so the check is skipped there with a note.
 - **documentation drift.** A column declared in a model's YAML that no longer exists in the
   built table (per `catalog.json`) is stale documentation to delete. Rerun `dbt docs generate`
   first if the catalog is old.
@@ -126,13 +130,13 @@ to 365 there.
   model of 1 GB or more built with neither `partition_by` nor `cluster_by` gets a full scan from
   every query that touches it. The offenders (up to 20) are listed with stored size and the
   bytes user queries scanned over the window, most scanned first, so the top entry is the
-  partitioning fix that saves the most. Skipped on Snowflake, which micro-partitions
-  automatically.
+  partitioning fix that saves the most. BigQuery only: Snowflake micro-partitions
+  automatically, and Redshift manages sort and distribution itself.
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage
-  you'd reclaim; on Snowflake the sizes come live from the warehouse (no `dbt docs generate`
-  needed) and include the time-travel and fail-safe copies still billed for it. Columns can't
-  be sized (neither BigQuery nor Snowflake reports storage per column), so they rank by their
-  table's size.
+  you'd reclaim; on Snowflake and Redshift the sizes come live from the warehouse (no
+  `dbt docs generate` needed), and Snowflake's include the time-travel and fail-safe copies
+  still billed for it. Columns can't be sized (no warehouse reports storage per column), so
+  they rank by their table's size.
 
 ## 📦 Installing it
 
@@ -169,8 +173,9 @@ Export / Help; the Help tab lists the scan flags and example commands). When you
 | `dbt-debt scan --min-age-days 30` | anything first seen in the last 30 days is "too new to judge", not unused (default: 7; `0` turns the guard off) |
 | `dbt-debt scan --rare-threshold 10` | models with at most 10 queries in the window are "rarely used" (default: 5; `0` turns the band off) |
 
-The warehouse is detected from your dbt artifacts (`--warehouse bigquery|snowflake` overrides).
-Snowflake needs the optional extra, `pip install 'dbt-debt[snowflake]'`.
+The warehouse is detected from your dbt artifacts (`--warehouse bigquery|snowflake|redshift`
+overrides). Snowflake and Redshift need their optional extras, `pip install
+'dbt-debt[snowflake]'` / `pip install 'dbt-debt[redshift]'`.
 
-For the cache, how it works, permissions and sign-in (BigQuery and Snowflake), full options, and
-how to work on dbt-debt, see [`USAGE.md`](USAGE.md).
+For the cache, how it works, permissions and sign-in (BigQuery, Snowflake, and Redshift), full
+options, and how to work on dbt-debt, see [`USAGE.md`](USAGE.md).

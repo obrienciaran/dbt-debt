@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "dbt-debt"
 version = "0.0.1"
-description = "A technical-debt scorecard for dbt projects on BigQuery and Snowflake: finds unused models and columns and what is safely removable."
+description = "A technical-debt scorecard for dbt projects on BigQuery, Snowflake, and Redshift: finds unused models and columns and what is safely removable."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 snowflake = ["snowflake-connector-python>=3.0"]
+redshift = ["redshift-connector>=2.1"]
 dev = ["pytest>=8.0", "mypy>=1.8", "ruff>=0.4"]
 
 [project.scripts]
@@ -35,11 +36,11 @@ quote-style = "double"
 python_version = "3.10"
 strict = true
 
-# The Snowflake connector is an optional extra and intentionally absent from the dev
-# environment (the isolation invariant, the suite runs with no warehouse SDK exercised), so
-# its lazy imports type-check as Any rather than failing the strict run.
+# The Snowflake and Redshift connectors are optional extras and intentionally absent from the
+# dev environment (the isolation invariant, the suite runs with no warehouse SDK exercised),
+# so their lazy imports type-check as Any rather than failing the strict run.
 [[tool.mypy.overrides]]
-module = ["snowflake", "snowflake.*"]
+module = ["snowflake", "snowflake.*", "redshift_connector", "redshift_connector.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

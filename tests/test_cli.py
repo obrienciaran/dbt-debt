@@ -194,6 +194,7 @@ def test_warehouse_auto_detects_from_the_manifest_adapter() -> None:
     from dbt_debt.cli import _resolve_warehouse
 
     assert _resolve_warehouse(None, _manifest_for("snowflake")) == "snowflake"
+    assert _resolve_warehouse(None, _manifest_for("redshift")) == "redshift"
 
 
 def test_missing_adapter_type_falls_back_to_bigquery() -> None:
@@ -207,13 +208,13 @@ def test_unsupported_adapter_exits_two(tmp_path: Path, capsys: pytest.CaptureFix
     target = tmp_path / "target"
     target.mkdir()
     manifest = {
-        "metadata": {**_METADATA, "adapter_type": "redshift"},
+        "metadata": {**_METADATA, "adapter_type": "duckdb"},
         "nodes": {"model.p.m": {"resource_type": "model", "name": "m", "schema": "s"}},
     }
     (target / "manifest.json").write_text(json.dumps(manifest))
     assert main(["scan", "--project-dir", str(tmp_path)]) == 2
     err = capsys.readouterr().err
-    assert "redshift" in err
+    assert "duckdb" in err
     assert "--warehouse" in err
 
 
@@ -231,6 +232,22 @@ def test_snowflake_scan_without_the_connector_exits_three(
     (target / "manifest.json").write_text(json.dumps(manifest))
     assert main(["scan", "--project-dir", str(tmp_path), "--no-cache"]) == 3
     assert "dbt-debt[snowflake]" in capsys.readouterr().err
+
+
+def test_redshift_scan_without_the_connector_exits_three(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Same isolation proof for the Redshift extra: the SDK is only reached for the selected
+    # warehouse, and its absence is a readable exit 3.
+    manifest = {
+        "metadata": {**_METADATA, "adapter_type": "redshift"},
+        "nodes": {"model.p.m": {"resource_type": "model", "name": "m", "schema": "s"}},
+    }
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "manifest.json").write_text(json.dumps(manifest))
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache"]) == 3
+    assert "dbt-debt[redshift]" in capsys.readouterr().err
 
 
 def test_cache_key_carries_the_warehouse(tmp_path: Path) -> None:

@@ -14,7 +14,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
-from dbt_debt.domain import UsageRow, WarehouseRelation
+from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
 
 _REGION_RE = re.compile(r"^[A-Za-z0-9-]+$")
 _PROJECT_RE = re.compile(r"^[A-Za-z0-9-]+$")
@@ -206,6 +206,19 @@ def parse_last_modified_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, dat
     """Parse last-modified rows into a relation_key -> last data change map."""
 
     return {str(row["relation_key"]).lower(): row["last_modified"] for row in rows}
+
+
+def parse_table_storage_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, TableStorage]:
+    """Parse storage-metrics rows into a relation_key -> `TableStorage` map (NULL bytes read as 0)."""
+
+    return {
+        str(row["relation_key"]).lower(): TableStorage(
+            active_bytes=int(row.get("active_bytes") or 0),
+            time_travel_bytes=int(row.get("time_travel_bytes") or 0),
+            failsafe_bytes=int(row.get("failsafe_bytes") or 0),
+        )
+        for row in rows
+    }
 
 
 def parse_usage_rows(rows: Iterable[Mapping[str, Any]]) -> list[UsageRow]:

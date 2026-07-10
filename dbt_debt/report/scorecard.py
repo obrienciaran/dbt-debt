@@ -21,6 +21,7 @@ from dbt_debt.domain import (
     ColumnRef,
     Manifest,
     Relation,
+    TableStorage,
     UsageRow,
     WarehouseRelation,
 )
@@ -59,7 +60,9 @@ class DeadModel:
     """A dead buildable node and the storage it would reclaim. `file_path` is the file to remove.
 
     `resource_type` tags what kind of node died — "model", "seed", or "snapshot" — so the
-    renderers can label non-model entries without a second list.
+    renderers can label non-model entries without a second list. On Snowflake,
+    `time_travel_bytes` and `failsafe_bytes` are the retained copies the account still pays
+    for on top of `total_bytes` (live data); both are 0 on BigQuery, which has no equivalent.
     """
 
     unique_id: str
@@ -68,6 +71,8 @@ class DeadModel:
     total_bytes: int
     file_path: str | None = None
     resource_type: str = "model"
+    time_travel_bytes: int = 0
+    failsafe_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -196,17 +201,34 @@ class ColumnReport:
 
 
 @dataclass(frozen=True)
+class OrphanedRelation:
+    """A table in a dbt-managed dataset with no dbt node, plus any direct-query evidence.
+
+    `query_count` / `last_queried` / `bytes_scanned` come from the same usage rows the model
+    verdicts join: a non-zero count means people still query the orphan directly — the
+    dangerous-to-drop ones — while zero means nothing read it all window. `last_queried` is an
+    ISO-8601 string so the scorecard serializes to JSON unchanged.
+    """
+
+    relation_key: str
+    relation_type: str
+    query_count: int = 0
+    last_queried: str | None = None
+    bytes_scanned: int = 0
+
+
+@dataclass(frozen=True)
 class OrphanReport:
     """The orphan-grain section: warehouse relations dbt does not account for.
 
-    `orphaned_relations` are tables in dbt-managed datasets with no dbt node that nothing reads;
+    `orphaned_relations` are tables in dbt-managed datasets with no dbt node that no model reads;
     `undeclared_sources` are relations a model reads that have no dbt node (declare them as
     sources). `orphans_checked` is False when the warehouse table metadata could not be listed
     (missing `bigquery.tables.list`) — undeclared sources are still reported, since they come from
     the manifest, but the orphan list is then empty and not trustworthy.
     """
 
-    orphaned_relations: tuple[WarehouseRelation, ...] = ()
+    orphaned_relations: tuple[OrphanedRelation, ...] = ()
     undeclared_sources: tuple[str, ...] = ()
     orphans_checked: bool = False
 
@@ -274,6 +296,7 @@ def build_scorecard(
     now: datetime | None = None,
     catalog_columns: Mapping[str, Sequence[str]] | None = None,
     last_modified: Mapping[str, datetime] | None = None,
+    table_storage: Mapping[str, TableStorage] | None = None,
 ) -> Scorecard:
     """Combine usage, DAG propagation, and manifest traversals into a `Scorecard`.
 
@@ -284,7 +307,9 @@ def build_scorecard(
     at all is set aside the same way (as "missing a first-seen date, likely a new table"), since
     ACCOUNT_USAGE.TABLES lags behind reality. Queried nodes with at most `config.rare_threshold`
     queries land in the separate rarely-used review band, which feeds none of those figures
-    either. `now` is injectable for tests.
+    either. `table_storage` (Snowflake only) adds the time-travel/fail-safe breakdown to the
+    dead-asset lists; the totals and ranking come from `storage_bytes` as ever. `now` is
+    injectable for tests.
     """
 
     usage_rows = list(usage_rows)
@@ -424,19 +449,25 @@ def build_scorecard(
             )
         )
 
+    storage_by_key = dict(table_storage or {})
+
     def ranked_assets(uids: Set[str]) -> tuple[DeadModel, ...]:
         ranked = sorted(uids, key=lambda uid: (-_model_bytes(manifest, storage_bytes, uid), uid))
-        return tuple(
-            DeadModel(
+
+        def entry(uid: str) -> DeadModel:
+            storage = storage_by_key.get(manifest.models[uid].relation_key)
+            return DeadModel(
                 unique_id=uid,
                 name=manifest.models[uid].name,
                 relation_key=manifest.models[uid].relation_key,
                 total_bytes=_model_bytes(manifest, storage_bytes, uid),
                 file_path=manifest.models[uid].original_file_path,
                 resource_type=manifest.models[uid].resource_type,
+                time_travel_bytes=storage.time_travel_bytes if storage else 0,
+                failsafe_bytes=storage.failsafe_bytes if storage else 0,
             )
-            for uid in ranked
-        )
+
+        return tuple(entry(uid) for uid in ranked)
 
     return Scorecard(
         project_name=manifest.project_name,
@@ -531,20 +562,38 @@ def build_orphan_report(
     manifest: Manifest,
     existing: Iterable[WarehouseRelation] | None,
     references: Set[str],
+    usage_rows: Iterable[UsageRow] = (),
 ) -> OrphanReport:
     """Assemble the orphan section: undeclared sources (manifest-only) plus orphaned relations.
 
     `existing` is None when the warehouse table metadata could not be listed (missing
     `bigquery.tables.list`); then `orphans_checked` is False and the orphan list is empty, but
     undeclared sources are still reported because they are recovered from the manifest.
+    `usage_rows` (already fetched for the model verdicts) attach direct-query evidence to each
+    orphan and rank the still-queried ones first — those are dangerous to drop.
     """
 
     dbt_keys = manifest.dbt_relation_keys()
     undeclared = undeclared_sources(references, dbt_keys)
     if existing is None:
         return OrphanReport(undeclared_sources=undeclared, orphans_checked=False)
+
+    usage_by_key = {row.relation_key: row for row in usage_rows}
+
+    def orphan_entry(relation: WarehouseRelation) -> OrphanedRelation:
+        row = usage_by_key.get(relation.relation_key)
+        return OrphanedRelation(
+            relation_key=relation.relation_key,
+            relation_type=relation.relation_type,
+            query_count=row.query_count if row else 0,
+            last_queried=row.last_queried.isoformat() if row and row.last_queried else None,
+            bytes_scanned=row.bytes_scanned if row else 0,
+        )
+
+    entries = [orphan_entry(r) for r in orphaned_relations(existing, references, dbt_keys)]
+    entries.sort(key=lambda o: (-o.bytes_scanned, -o.query_count, o.relation_key))
     return OrphanReport(
-        orphaned_relations=orphaned_relations(existing, references, dbt_keys),
+        orphaned_relations=tuple(entries),
         undeclared_sources=undeclared,
         orphans_checked=True,
     )

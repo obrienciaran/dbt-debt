@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping, Set
 from datetime import datetime
 
 from dbt_debt.consumption.client import MissingPermissionError
-from dbt_debt.domain import UsageRow, WarehouseRelation
+from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
 
 
 class FakeWarehouseClient:
@@ -27,6 +27,7 @@ class FakeWarehouseClient:
         first_seen: Mapping[str, datetime] | None = None,
         last_modified: Mapping[str, datetime] | None = None,
         freshness_permitted: bool = True,
+        table_storage: Mapping[str, TableStorage] | None = None,
     ) -> None:
         self._usage = list(usage)
         self._query_texts = list(query_texts)
@@ -36,6 +37,7 @@ class FakeWarehouseClient:
         self._first_seen = dict(first_seen or {})
         self._last_modified = dict(last_modified or {})
         self._freshness_permitted = freshness_permitted
+        self._table_storage = dict(table_storage or {})
         self.calls: Counter[str] = Counter()
 
     def assert_usage_permission(self) -> None:
@@ -63,6 +65,10 @@ class FakeWarehouseClient:
             raise MissingPermissionError("fake: cannot read managed-dataset table metadata")
         wanted = {dataset.lower() for dataset in datasets}
         return [r for r in self._existing if r.relation_key.split(".")[1] in wanted]
+
+    def table_storage(self) -> dict[str, TableStorage]:
+        self.calls["table_storage"] += 1
+        return dict(self._table_storage)
 
     def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
         self.calls["source_last_modified"] += 1

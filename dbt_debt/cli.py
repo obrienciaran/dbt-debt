@@ -28,7 +28,7 @@ from dbt_debt.consumption.client import (
 )
 from dbt_debt.consumption.columns import consumed_model_columns
 from dbt_debt.consumption.exclusion import validate_query_comment_pattern
-from dbt_debt.domain import Manifest, WarehouseRelation
+from dbt_debt.domain import Manifest, TableStorage, WarehouseRelation
 from dbt_debt.lineage.sqlglot_source import SqlglotLineage
 from dbt_debt.references import model_relation_references
 from dbt_debt.report.render_json import render_json, render_orphans_json
@@ -59,12 +59,19 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
         usage = client.table_usage()
     catalog = _load_catalog(config)
     storage = _storage_bytes(catalog)
+    # On Snowflake the live storage metrics replace the catalog sizes (warehouse truth, no
+    # `dbt docs generate` needed) and carry the time-travel/fail-safe breakdown.
+    table_storage: dict[str, TableStorage] = {}
+    if config.warehouse == "snowflake":
+        with status("Reading storage metrics"):
+            table_storage = client.table_storage()
+        storage.update({key: s.active_bytes for key, s in table_storage.items()})
     with status("Analysing column usage"):
         column_report = _column_report(config, client, manifest, catalog, storage)
     references = model_relation_references(manifest, dialect=config.dialect)
     with status("Listing warehouse relations"):
         existing = _existing_relations(client, manifest)
-    orphan_report = build_orphan_report(manifest, existing, references)
+    orphan_report = build_orphan_report(manifest, existing, references, usage)
     first_seen: dict[str, datetime] = {}
     if config.min_age_days > 0:
         with status("Checking relation ages"):
@@ -87,6 +94,7 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
         first_seen,
         catalog_columns=catalog_columns,
         last_modified=last_modified,
+        table_storage=table_storage,
     )
 
 

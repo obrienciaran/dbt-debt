@@ -66,8 +66,8 @@ to 365 there.
 - **rarely used models.** Queried, but at most 5 times in the whole window (`--rare-threshold`;
   `0` turns the band off). These still count as used and never feed the removable or reclaimable
   figures. Each is listed with its query count, last-queried date, size, and the bytes those few
-  queries scanned, most scanned first: a big scanned figure on a tiny query count means expensive
-  *and* barely used, the strongest case for deprecating.
+  queries scanned, most scanned first. A big scanned figure on a tiny query count means expensive
+  and barely used, the strongest case for deprecating.
 - **too new to judge.** A model first seen in the query log fewer than 7 days ago
   (`--min-age-days`) hasn't had a fair chance to be queried, so it's listed separately instead of
   being called unused. The guard only covers what dbt builds (models, seeds, snapshots); an
@@ -80,10 +80,10 @@ to 365 there.
   the report states its confidence ("column verdicts based on 96% of query text"). Model verdicts
   never depend on parsing.
 - **columns you could remove.** Unused columns nothing in the project still depends on (no data
-  test, no contract). Suggestions, not an automatic delete: "unused" comes from the query log,
-  which can't see everything (see *What counts as usage*). An unused column that still has a
-  dependency is listed separately and not counted here.
-- **tests you could remove.** Data tests attached to an unused model or column: remove the model
+  test, no contract). These are suggestions, not an automatic delete, since "unused" comes from
+  the query log, which can't see everything (see *What counts as usage*). An unused column that
+  still has a dependency is listed separately and not counted here.
+- **tests you could remove.** Data tests attached to an unused model or column. Remove the model
   or column and its tests go with it.
 - **exposures affected.** An **exposure** is a downstream consumer (a dashboard, a report) your
   team has written into the dbt project. An unused model feeding one is flagged "affected" so you
@@ -95,29 +95,29 @@ to 365 there.
   saved query (even through a chain of metrics) is flagged for review the same way, and a column
   a semantic model names is never counted as removable.
 - **tables with no dbt model behind them (orphans).** A real table or view in a dataset dbt
-  builds into, but with no dbt record — usually left over from a renamed or deleted model, or
+  builds into, but with no dbt record, usually left over from a renamed or deleted model, or
   made by hand. Only datasets dbt builds into are searched, so raw input tables are never
   flagged.
 - **tables your models read but dbt was never told about.** A model reads a table you never
   declared; add it as a `source()`. Found by reading the model's SQL, so it needs no extra
   warehouse permission.
-- **sources declared but never read.** The reverse: a `sources.yml` entry no model, exposure, or
-  semantic-layer consumer references. Each is listed with its file path and any direct queries
+- **sources declared but never read.** The reverse case, a `sources.yml` entry no model, exposure,
+  or semantic-layer consumer references. Each is listed with its file path and any direct queries
   people ran against the raw table (count, last date, bytes scanned), so you can tell a dead
   declaration (delete the entry) from a table your team reads outside dbt (consider modelling
   it). A test on the source doesn't count as use. A review list; never feeds the unused-model
   figures.
 - **stale sources.** A declared source with no new data for more than 30 days
   (`--stale-source-days`; `0` turns the check off), which usually means the loader upstream of
-  dbt has stopped. The date comes from warehouse metadata: BigQuery needs read access to the
-  source datasets (skipped with a warning without it), Snowflake needs no extra grant. On
+  dbt has stopped. The date comes from warehouse metadata. BigQuery needs read access to the
+  source datasets (skipped with a warning without it); Snowflake needs no extra grant. On
   Snowflake the date also moves on DDL changes (even a table comment), so a stale table can
   occasionally look fresher than its data.
 - **documentation drift.** A column declared in a model's YAML that no longer exists in the
   built table (per `catalog.json`) is stale documentation to delete. Rerun `dbt docs generate`
   first if the catalog is old.
-- **coverage.** Three hygiene sentences: how many models have at least one test, how many have a
-  description, and how many columns do. The column figure counts the real columns from
+- **coverage.** Three hygiene sentences covering how many models have at least one test, how many
+  have a description, and how many columns do. The column figure counts the real columns from
   `catalog.json` when present (and says so), else the ones declared in YAML.
 - **large tables without partitioning or clustering (BigQuery only).** A table or incremental
   model of 1 GB or more built with neither `partition_by` nor `cluster_by` gets a full scan from
@@ -126,8 +126,8 @@ to 365 there.
   partitioning fix that saves the most. Skipped on Snowflake, which micro-partitions
   automatically.
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage
-  you'd reclaim. Columns can't be sized (BigQuery doesn't report storage per column), so they
-  rank by their table's size.
+  you'd reclaim. Columns can't be sized (neither BigQuery nor Snowflake reports storage per
+  column), so they rank by their table's size.
 
 ## 📦 Installing it
 

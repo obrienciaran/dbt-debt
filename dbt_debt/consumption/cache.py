@@ -3,10 +3,10 @@
 `CachingWarehouseClient` is a decorator implementing the `WarehouseClient` Protocol, so it
 composes with any real client and is exercised by the same `FakeWarehouseClient` in tests. It
 memoizes the slow warehouse round-trips (`table_usage`, `query_texts`, `relation_first_seen`,
-`existing_relations`, `source_last_modified`) to JSON files keyed by the query parameters —
-never the manifest, which
-warehouse results don't depend on. The permission preflight is delegated, never cached, because
-permissions can change and the check is load-bearing.
+`existing_relations`, `table_storage`, `source_last_modified`) to JSON files keyed by the query
+parameters — never the manifest, which warehouse results don't depend on. The permission
+preflight is delegated, never cached, because permissions can change and the check is
+load-bearing.
 
 Entries carry their creation time *and the TTL they were written under*: an expired read is a
 miss (and the file is removed), and every cache directory is pruned of expired files on
@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from dbt_debt.consumption.client import WarehouseClient
-from dbt_debt.domain import UsageRow, WarehouseRelation
+from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
 
 CACHE_ROOT_NAME = "dbt-debt-cache"
 
@@ -105,6 +105,19 @@ def _relations_from_json(data: list[dict[str, Any]]) -> list[WarehouseRelation]:
     ]
 
 
+def _storage_to_json(data: dict[str, TableStorage]) -> dict[str, list[int]]:
+    return {key: [s.active_bytes, s.time_travel_bytes, s.failsafe_bytes] for key, s in data.items()}
+
+
+def _storage_from_json(data: dict[str, list[int]]) -> dict[str, TableStorage]:
+    return {
+        key: TableStorage(
+            active_bytes=values[0], time_travel_bytes=values[1], failsafe_bytes=values[2]
+        )
+        for key, values in data.items()
+    }
+
+
 class CachingWarehouseClient:
     """Wrap an inner `WarehouseClient`, serving the slow calls from a TTL-bounded disk cache."""
 
@@ -161,6 +174,15 @@ class CachingWarehouseClient:
             lambda: self._inner.existing_relations(datasets),
             _relations_to_json,
             _relations_from_json,
+        )
+
+    def table_storage(self) -> dict[str, TableStorage]:
+        return self._cached(
+            "table_storage",
+            {},
+            self._inner.table_storage,
+            _storage_to_json,
+            _storage_from_json,
         )
 
     def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:

@@ -11,7 +11,7 @@ from dbt_debt.artifacts.graph import Graph
 from dbt_debt.artifacts.manifest import load_manifest
 from dbt_debt.cli import _emit, _infer_database, _scan
 from dbt_debt.config import Config
-from dbt_debt.domain import UsageRow
+from dbt_debt.domain import TableStorage, UsageRow
 from dbt_debt.report.scorecard import ColumnReport, DeadColumn, build_scorecard
 from tests.fakes import FakeWarehouseClient
 
@@ -458,3 +458,44 @@ def test_scan_passes_source_freshness_through_and_degrades_cleanly(
     assert card.stale_checked is False
     assert card.stale_sources == ()
     assert "source" in capsys.readouterr().err
+
+
+def test_snowflake_storage_breakdown_lands_on_dead_models_only() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    storage = {FCT_KEY: 2048}
+    table_storage = {
+        FCT_KEY: TableStorage(active_bytes=2048, time_travel_bytes=512, failsafe_bytes=256)
+    }
+    card = build_scorecard(manifest, graph, [], storage, _config(), table_storage=table_storage)
+
+    dead = {m.relation_key: m for m in card.dead_models}
+    assert (dead[FCT_KEY].time_travel_bytes, dead[FCT_KEY].failsafe_bytes) == (512, 256)
+    assert (dead[STG_KEY].time_travel_bytes, dead[STG_KEY].failsafe_bytes) == (0, 0)
+    # The retained copies never feed the reclaimable figure, which stays the live bytes.
+    assert card.reclaimable_bytes == 2048
+
+
+def test_scan_on_snowflake_prefers_live_storage_metrics_over_catalog_sizes() -> None:
+    config = Config(
+        project_dir=FIXTURE.parent.parent,
+        target_path=Path(FIXTURE.parent.name),
+        warehouse="snowflake",
+        min_age_days=0,
+    )
+    client = FakeWarehouseClient(
+        table_storage={
+            FCT_KEY: TableStorage(active_bytes=4096, time_travel_bytes=100, failsafe_bytes=50)
+        }
+    )
+    card = _scan(config, client)
+    assert client.calls["table_storage"] == 1
+    dead = {m.relation_key: m for m in card.dead_models}
+    assert dead[FCT_KEY].total_bytes == 4096
+    assert (dead[FCT_KEY].time_travel_bytes, dead[FCT_KEY].failsafe_bytes) == (100, 50)
+
+
+def test_scan_on_bigquery_never_asks_for_storage_metrics() -> None:
+    client = FakeWarehouseClient()
+    _scan(_config(), client)
+    assert client.calls["table_storage"] == 0

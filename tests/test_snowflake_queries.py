@@ -1,8 +1,8 @@
 """Tests pinning the pure Snowflake ACCOUNT_USAGE SQL builders and the dbt exclusion.
 
-These pin the account-blind query shapes (built from Snowflake's published schemas, not yet
-validated live) so any drift is a conscious decision, the same way the BigQuery builders are
-pinned in test_consumption_jobs.
+These pin the query shapes (built from Snowflake's published schemas, core loop validated
+live) so any drift is a conscious decision, the same way the BigQuery builders are pinned
+in test_consumption_jobs.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from dbt_debt.consumption.snowflake_queries import (
     permission_probe_query,
     query_text_query,
     source_last_modified_query,
+    table_storage_query,
     table_usage_query,
 )
 
@@ -86,6 +87,17 @@ def test_exclusion_clause_uses_dollar_quoting_and_regexp_count() -> None:
 def test_exclusion_clause_rejects_patterns_that_break_dollar_quoting() -> None:
     with pytest.raises(ValueError):
         exclusion_clause("bad$$pattern")
+
+
+def test_table_storage_query_sums_every_incarnation() -> None:
+    sql = table_storage_query()
+    assert "FROM SNOWFLAKE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS" in sql
+    assert "SUM(active_bytes)" in sql
+    assert "SUM(time_travel_bytes)" in sql
+    assert "SUM(failsafe_bytes)" in sql
+    # No deleted filter: a dropped incarnation carries zero active bytes but real time-travel
+    # and fail-safe bytes until they expire, and those still bill under this relation's name.
+    assert "WHERE" not in sql
 
 
 def test_source_last_modified_query_reads_account_usage_tables() -> None:

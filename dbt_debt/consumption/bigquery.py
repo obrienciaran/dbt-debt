@@ -19,7 +19,7 @@ from dbt_debt.consumption.client import (
     WarehouseError,
 )
 from dbt_debt.consumption.exclusion import exclusion_clause
-from dbt_debt.domain import UsageRow, WarehouseRelation
+from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
 
 
 class RealBigQueryClient:
@@ -90,6 +90,12 @@ class RealBigQueryClient:
                 "is skipped; undeclared sources are still reported from the manifest."
             ) from exc
         return jobs.parse_relation_rows(rows)
+
+    def table_storage(self) -> dict[str, TableStorage]:
+        """Always empty: BigQuery has no billing-grade storage view readable with our grants
+        (`TABLE_STORAGE` needs `bigquery.tables.list`), so sizes come from catalog.json."""
+
+        return {}
 
     def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
         if not datasets:

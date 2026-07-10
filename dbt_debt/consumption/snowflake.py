@@ -5,10 +5,9 @@ warehouse-neutral row parsers in `jobs`. Imports are lazy so the rest of the pac
 test suite, via the fake) loads without the Snowflake dependency or any credentials — the
 connector is an optional extra (`pip install 'dbt-debt[snowflake]'`).
 
-Built account-blind from Snowflake's published schemas and **not yet validated against a live
-account** (see DESIGN.md). Known documented caveats: ACCOUNT_USAGE views lag reality by up to
-~45 minutes (harmless for a debt scan), and ACCESS_HISTORY needs Enterprise edition plus
-IMPORTED PRIVILEGES on the SNOWFLAKE database.
+Validated against a live Enterprise account (see DESIGN.md). Known documented caveats:
+ACCOUNT_USAGE views lag reality by up to ~45 minutes (harmless for a debt scan), and
+ACCESS_HISTORY needs Enterprise edition plus IMPORTED PRIVILEGES on the SNOWFLAKE database.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from dbt_debt.consumption.client import (
     MissingPermissionError,
     WarehouseError,
 )
-from dbt_debt.domain import UsageRow, WarehouseRelation
+from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
 
 _PERMISSION_HINT = (
     "reading SNOWFLAKE.ACCOUNT_USAGE needs IMPORTED PRIVILEGES on the SNOWFLAKE database, and "
@@ -109,6 +108,10 @@ class RealSnowflakeClient:
                 "still reported from the manifest."
             ) from exc
         return jobs.parse_relation_rows(rows)
+
+    def table_storage(self) -> dict[str, TableStorage]:
+        sql = snowflake_queries.table_storage_query()
+        return jobs.parse_table_storage_rows(self._run_wrapped(sql, "storage metrics"))
 
     def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
         if not datasets:

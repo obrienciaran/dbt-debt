@@ -146,6 +146,12 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
         ]
     if scorecard.reclaimable_bytes > 0:
         lines.append(f"  - {humanize_bytes(scorecard.reclaimable_bytes)} reclaimable storage")
+    retained = sum(m.time_travel_bytes + m.failsafe_bytes for m in scorecard.dead_models)
+    if retained > 0:
+        lines.append(
+            f"  - {humanize_bytes(retained)} more in time-travel and fail-safe copies of the "
+            "unused tables (billed until they expire)"
+        )
 
     # The summary list is columns when column analysis ran, else models.
     if columns is not None and columns.dead_columns:
@@ -296,19 +302,27 @@ def _detail_unused_sources(sources: tuple[UnusedSource, ...]) -> list[str]:
 
     lines = ["", f"Declared sources nothing in the project reads ({len(sources)}):"]
     for source in sources:
-        if source.query_count:
-            count = source.query_count
-            evidence = [f"{count} query" if count == 1 else f"{count} queries"]
-            if source.last_queried:
-                evidence.append(f"last {source.last_queried[:10]}")
-            if source.bytes_scanned > 0:
-                evidence.append(f"{humanize_bytes(source.bytes_scanned)} scanned")
-            usage = f"  (queried directly: {', '.join(evidence)})"
-        else:
-            usage = "  (no queries seen)"
+        usage = _query_evidence(source.query_count, source.last_queried, source.bytes_scanned)
         path = f"  {source.file_path}" if source.file_path else ""
         lines.append(f"  - {source.name}{usage}{path}")
     return lines
+
+
+def _query_evidence(query_count: int, last_queried: str | None, bytes_scanned: int) -> str:
+    """`  (queried directly: 3 queries, last 2026-07-01, 1.2 GB scanned)` or `  (no queries seen)`.
+
+    The direct-query evidence suffix shared by unused sources and orphaned tables — both are
+    warehouse relations dbt does not read, where observed queries mean "review before dropping".
+    """
+
+    if not query_count:
+        return "  (no queries seen)"
+    evidence = [f"{query_count} query" if query_count == 1 else f"{query_count} queries"]
+    if last_queried:
+        evidence.append(f"last {last_queried[:10]}")
+    if bytes_scanned > 0:
+        evidence.append(f"{humanize_bytes(bytes_scanned)} scanned")
+    return f"  (queried directly: {', '.join(evidence)})"
 
 
 def _pct(count: int, total: int) -> str:
@@ -341,7 +355,9 @@ def _orphan_summary_lines(orphans: OrphanReport) -> list[str]:
     lines = ["Orphans:"]
     if orphans.orphans_checked:
         count = len(orphans.orphaned_relations)
-        lines.append(f"  ✗ {_plural(count, 'table')} in managed datasets with no dbt model")
+        queried = sum(1 for r in orphans.orphaned_relations if r.query_count)
+        suffix = f" ({queried} still queried directly)" if queried else ""
+        lines.append(f"  ✗ {_plural(count, 'table')} in managed datasets with no dbt model{suffix}")
     else:
         lines.append(
             "  ⚠ orphan check skipped — needs bigquery.tables.list (roles/bigquery.metadataViewer)"
@@ -358,9 +374,15 @@ def _detail_orphans(orphans: OrphanReport) -> list[str]:
     lines: list[str] = []
     if orphans.orphans_checked:
         relations = orphans.orphaned_relations
-        lines += ["", f"Orphaned tables ({len(relations)}):"]
+        order = "; still-queried first" if any(r.query_count for r in relations) else ""
+        lines += ["", f"Orphaned tables ({len(relations)}{order}):"]
         for relation in relations:
-            lines.append(f"  - {relation.relation_key}  ({relation.relation_type})")
+            usage = _query_evidence(
+                relation.query_count, relation.last_queried, relation.bytes_scanned
+            )
+            lines.append(f"  - {relation.relation_key}  ({relation.relation_type}){usage}")
+        if any(r.query_count for r in relations):
+            lines.append("  (a queried orphan is still read directly; review before dropping it)")
     else:
         lines += ["", "Orphaned tables: skipped — needs bigquery.tables.list"]
     if orphans.undeclared_sources:
@@ -410,8 +432,15 @@ def _detail_models(dead_models: tuple[DeadModel, ...]) -> list[str]:
     for model in dead_models:
         size = f"  {humanize_bytes(model.total_bytes)}" if model.total_bytes > 0 else ""
         path = f"  {model.file_path}" if model.file_path else ""
-        lines.append(f"  - {model.name}{_kind_tag(model)}{size}{path}")
+        lines.append(f"  - {model.name}{_kind_tag(model)}{size}{_retained_tag(model)}{path}")
     return lines
+
+
+def _retained_tag(model: DeadModel) -> str:
+    """` (+ 1.2 GB time-travel/fail-safe)` when Snowflake still bills retained copies; else empty."""
+
+    retained = model.time_travel_bytes + model.failsafe_bytes
+    return f" (+ {humanize_bytes(retained)} time-travel/fail-safe)" if retained > 0 else ""
 
 
 def _kind_tag(model: DeadModel) -> str:
@@ -440,7 +469,7 @@ def _dead_kind_breakdown(dead_models: tuple[DeadModel, ...]) -> str:
 
 def _format_model(model: DeadModel) -> str:
     size = f" ({humanize_bytes(model.total_bytes)})" if model.total_bytes > 0 else ""
-    return f"{model.name}{_kind_tag(model)}{size}"
+    return f"{model.name}{_kind_tag(model)}{size}{_retained_tag(model)}"
 
 
 def _format_rare(model: RarelyUsedModel) -> str:

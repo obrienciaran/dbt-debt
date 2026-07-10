@@ -108,6 +108,21 @@ class WarehouseRelation:
 
 
 @dataclass(frozen=True)
+class TableStorage:
+    """What one table's storage costs, split the way the warehouse bills it.
+
+    Snowflake only (`ACCOUNT_USAGE.TABLE_STORAGE_METRICS`): `active_bytes` is the live data,
+    `time_travel_bytes` and `failsafe_bytes` are the retained copies still billed after changes
+    and drops. Always bytes, never dollars — rates vary by contract and region. BigQuery has no
+    equivalent surface, so its sizes come from catalog.json alone.
+    """
+
+    active_bytes: int
+    time_travel_bytes: int
+    failsafe_bytes: int
+
+
+@dataclass(frozen=True)
 class ColumnEdge:
     """A column-lineage edge: `upstream` feeds `downstream` (data flows upstream → downstream).
 

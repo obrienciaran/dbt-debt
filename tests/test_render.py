@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-from dbt_debt.domain import WarehouseRelation
 from dbt_debt.report.render_json import render_json, render_orphans_json
 from dbt_debt.report.render_text import humanize_bytes, render_orphans_text, render_text
 from dbt_debt.report.scorecard import (
@@ -12,6 +11,7 @@ from dbt_debt.report.scorecard import (
     ColumnReport,
     DeadColumn,
     DeadModel,
+    OrphanedRelation,
     OrphanReport,
     PhantomColumn,
     RarelyUsedModel,
@@ -341,7 +341,7 @@ def _orphan_card(checked: bool = True) -> Scorecard:
         active_models=1,
         unused_models=0,
         orphans=OrphanReport(
-            orphaned_relations=(WarehouseRelation("p.d.tmp_old", "BASE TABLE"),),
+            orphaned_relations=(OrphanedRelation("p.d.tmp_old", "BASE TABLE"),),
             undeclared_sources=("p.raw.events",),
             orphans_checked=checked,
         ),
@@ -353,6 +353,60 @@ def test_render_text_includes_orphan_summary() -> None:
     assert "Orphans:" in out
     assert "  ✗ 1 table in managed datasets with no dbt model" in out
     assert "  ! 1 source found but not declared in the manifest" in out
+
+
+def test_render_text_orphan_query_evidence_and_ranking_note() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=1,
+        unused_models=0,
+        orphans=OrphanReport(
+            orphaned_relations=(
+                OrphanedRelation("p.d.tmp_hot", "BASE TABLE", 3, "2026-07-01T00:00:00+00:00", 2048),
+                OrphanedRelation("p.d.tmp_old", "BASE TABLE"),
+            ),
+            orphans_checked=True,
+        ),
+    )
+    out = render_text(card, detail=True)
+    assert "✗ 2 tables in managed datasets with no dbt model (1 still queried directly)" in out
+    assert "Orphaned tables (2; still-queried first):" in out
+    assert (
+        "  - p.d.tmp_hot  (BASE TABLE)  "
+        "(queried directly: 3 queries, last 2026-07-01, 2.0 KB scanned)" in out
+    )
+    assert "  - p.d.tmp_old  (BASE TABLE)  (no queries seen)" in out
+    assert "review before dropping" in out
+
+
+def test_render_text_shows_snowflake_retained_storage() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=0,
+        unused_models=1,
+        dead_models=(
+            DeadModel(
+                "model.x.fct",
+                "fct",
+                "p.d.fct",
+                2048,
+                "models/fct.sql",
+                time_travel_bytes=1024,
+                failsafe_bytes=1024,
+            ),
+        ),
+        reclaimable_bytes=2048,
+    )
+    out = render_text(card, detail=True)
+    assert "1. fct (2.0 KB) (+ 2.0 KB time-travel/fail-safe)" in out
+    assert (
+        "- 2.0 KB more in time-travel and fail-safe copies of the unused tables "
+        "(billed until they expire)" in out
+    )
+    # The detail list carries the same tag next to the size and path.
+    assert "  - fct  2.0 KB (+ 2.0 KB time-travel/fail-safe)  models/fct.sql" in out
 
 
 def test_render_text_orphan_skipped_when_metadata_unreadable() -> None:
@@ -445,7 +499,7 @@ def test_detail_orders_orphans_before_removable_tests() -> None:
         removable_tests=("t1",),
         dead_models=(DeadModel("model.x.fct", "fct", "p.d.fct", 0),),
         orphans=OrphanReport(
-            orphaned_relations=(WarehouseRelation("p.d.tmp_old", "BASE TABLE"),),
+            orphaned_relations=(OrphanedRelation("p.d.tmp_old", "BASE TABLE"),),
             orphans_checked=True,
         ),
     )

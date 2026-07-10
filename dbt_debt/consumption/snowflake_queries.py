@@ -21,6 +21,7 @@ from dbt_debt.consumption.exclusion import validate_query_comment_pattern
 _ACCESS_HISTORY = "SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY"
 _QUERY_HISTORY = "SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY"
 _TABLES = "SNOWFLAKE.ACCOUNT_USAGE.TABLES"
+_TABLE_STORAGE_METRICS = "SNOWFLAKE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS"
 
 # Snowflake unquoted identifiers: letters, digits, underscore, dollar.
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_$]+$")
@@ -119,6 +120,27 @@ SELECT
   LOWER(table_catalog || '.' || table_schema || '.' || table_name) AS relation_key,
   MIN(created) AS first_seen
 FROM {_TABLES}
+GROUP BY relation_key
+""".strip()
+
+
+def table_storage_query() -> str:
+    """Per-relation active, time-travel, and fail-safe bytes, for the storage-debt figures.
+
+    `TABLE_STORAGE_METRICS` keeps one row per table incarnation, dropped ones included while
+    their retained copies still bill, so the sums per relation_key cover everything the account
+    pays for under that name: a dropped incarnation carries zero active bytes but real
+    time-travel/fail-safe bytes until they expire. Covered by the same IMPORTED PRIVILEGES
+    grant as the rest of ACCOUNT_USAGE, so no new permission.
+    """
+
+    return f"""
+SELECT
+  LOWER(table_catalog || '.' || table_schema || '.' || table_name) AS relation_key,
+  COALESCE(SUM(active_bytes), 0) AS active_bytes,
+  COALESCE(SUM(time_travel_bytes), 0) AS time_travel_bytes,
+  COALESCE(SUM(failsafe_bytes), 0) AS failsafe_bytes
+FROM {_TABLE_STORAGE_METRICS}
 GROUP BY relation_key
 """.strip()
 

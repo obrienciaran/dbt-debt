@@ -16,6 +16,7 @@ from dbt_debt.consumption.jobs import (
     source_last_modified_query,
     parse_query_text_rows,
     parse_relation_rows,
+    parse_table_storage_rows,
     parse_usage_rows,
     query_text_query,
     table_usage_query,
@@ -86,6 +87,19 @@ def test_parse_usage_rows_tolerates_absent_or_null_bytes() -> None:
         {"relation_key": "p.d.null", "query_count": 1, "last_queried": when, "bytes_scanned": None},
     ]
     assert [row.bytes_scanned for row in parse_usage_rows(rows)] == [0, 0]
+
+
+def test_parse_table_storage_rows_lowercases_keys_and_reads_nulls_as_zero() -> None:
+    from dbt_debt.domain import TableStorage
+
+    rows = [
+        {"relation_key": "DB.S.T", "active_bytes": 10, "time_travel_bytes": 5, "failsafe_bytes": 2},
+        {"relation_key": "db.s.dropped", "active_bytes": None, "time_travel_bytes": None},
+    ]
+    assert parse_table_storage_rows(rows) == {
+        "db.s.t": TableStorage(active_bytes=10, time_travel_bytes=5, failsafe_bytes=2),
+        "db.s.dropped": TableStorage(active_bytes=0, time_travel_bytes=0, failsafe_bytes=0),
+    }
 
 
 def test_existing_relations_query_shape() -> None:

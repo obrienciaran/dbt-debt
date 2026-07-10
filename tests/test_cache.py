@@ -21,7 +21,7 @@ from dbt_debt.consumption.cache import (
     _usage_to_json,
     cache_dir_for,
 )
-from dbt_debt.domain import UsageRow, WarehouseRelation
+from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
 from tests.fakes import FakeWarehouseClient
 
 _KEY = {"project": "p", "region": "US", "lookback_days": "180", "query_comment_pattern": "x"}
@@ -268,6 +268,18 @@ def _backdate(path: Path, *, hours: float) -> None:
     entry = json.loads(path.read_text())
     entry["created"] = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     path.write_text(json.dumps(entry))
+
+
+def test_table_storage_round_trips_through_the_cache(tmp_path: Path) -> None:
+    storage = {"a.b.c": TableStorage(active_bytes=10, time_travel_bytes=5, failsafe_bytes=2)}
+    inner = FakeWarehouseClient(table_storage=storage)
+    client = _client(inner, tmp_path)
+
+    first = client.table_storage()
+    second = client.table_storage()
+
+    assert first == second == storage
+    assert inner.calls["table_storage"] == 1
 
 
 def test_source_last_modified_is_cached_and_keyed_on_the_datasets(tmp_path: Path) -> None:

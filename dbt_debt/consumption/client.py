@@ -11,7 +11,7 @@ from collections.abc import Set
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from dbt_debt.domain import UsageRow, WarehouseRelation
+from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
 
 
 class WarehouseError(RuntimeError):
@@ -67,6 +67,15 @@ class WarehouseClient(Protocol):
         Raises `MissingPermissionError` when the warehouse metadata cannot be listed (on
         BigQuery the caller needs `bigquery.tables.list`, e.g. `roles/bigquery.metadataViewer`);
         returns an empty list when `datasets` is empty.
+        """
+        ...
+
+    def table_storage(self) -> dict[str, TableStorage]:
+        """relation_key -> live active/time-travel/fail-safe bytes, for storage-debt figures.
+
+        Snowflake reads `ACCOUNT_USAGE.TABLE_STORAGE_METRICS` (covered by the same grant as
+        the usage preflight); BigQuery has no equivalent surface and returns an empty dict,
+        so its sizes come from catalog.json alone.
         """
         ...
 

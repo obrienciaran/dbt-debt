@@ -97,7 +97,7 @@ A few cases to keep in mind:
   ago (`--min-age-days`) hasn't had a fair chance to be queried, so it's reported as "too new
   to judge" instead of unused, and left out of the removable-test and reclaimable-storage
   figures. On Snowflake, a table with no first-seen date at all gets the same treatment
-  ("missing a first-seen date — likely a new table"), because `ACCOUNT_USAGE.TABLES` lags
+  ("missing a first-seen date, likely a new table"), because `ACCOUNT_USAGE.TABLES` lags
   about 90 minutes behind reality.
 - **Semantic-layer declarations.** Models feeding a semantic model, metric, or saved query are
   flagged for review when unused (like exposures), and columns a semantic model names are
@@ -217,7 +217,7 @@ already required for the "too new" guard. One caveat: its `last_altered` date al
 DDL changes, so a stale table can occasionally look fresher than its data.
 
 **Two timing notes.** `ACCOUNT_USAGE` views lag reality; Snowflake documents 90 minutes for
-`TABLES` and 3 hours for `ACCESS_HISTORY` (both approximate — in practice often much less).
+`TABLES` and 3 hours for `ACCESS_HISTORY` (both approximate; in practice often much less).
 Because the table list behind the "too new" guard can lag, a dead table with no first-seen
 date yet is set aside as "missing a first-seen date (likely a new table)" rather than judged.
 Scan again later, or with `--no-cache`, and it settles into a normal verdict.

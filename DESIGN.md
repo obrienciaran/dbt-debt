@@ -138,7 +138,7 @@ use), orphan discovery finds hand-made tables through the case normalization, th
 first-seen/too-new guard behaves as designed (see the first-seen bullet), and the scan exits 0
 end to end. The missing reclaimable-bytes figures from that first run are explained and fixed:
 dbt-snowflake writes the table size under the `bytes` stats key ("Approximate Size"), not
-BigQuery's `num_bytes` — the catalog reader checks both (views carry no stats and report 0),
+BigQuery's `num_bytes`. The catalog reader checks both (views carry no stats and report 0),
 confirmed live 2026-07-10 with reclaimable-storage figures appearing on a demo scan.
 
 The design decisions, and what remains to confirm:
@@ -160,7 +160,7 @@ The design decisions, and what remains to confirm:
   the rarely-used band empties, once `ACCOUNT_USAGE.TABLES` has a row for it. *Decided
   2026-07-10:* `ACCOUNT_USAGE.TABLES` lags reality (documented 90 minutes), so on Snowflake a
   dead node with no first-seen row cannot prove its age and is set aside as "missing a
-  first-seen date (likely a new table)" — a review list beside too-new, excluded from every
+  first-seen date (likely a new table)", a review list beside too-new, excluded from every
   unused-derived figure, and the rare band gets the same protection. BigQuery is untouched:
   there first-seen comes from JOBS, so a missing row means zero jobs all window, the strongest
   unused signal there is.
@@ -198,7 +198,9 @@ report notes that a stale catalog can false-positive, pointing at `dbt docs gene
 `incremental` models (1 GiB or more, at most 20) declaring neither `partition_by` nor
 `cluster_by`. That check only runs on BigQuery, since Snowflake micro-partitions automatically
 and its explicit clustering keys are optional large-table tuning rather than debt. It ranks by
-*stored* bytes; scan cost is not collected (see the backlog).
+*stored* bytes; scan cost is not collected (see the backlog). Validated live 2026-07-10 on
+`demo_bq`: a planted 1.34 GiB generated-rows table was flagged, disappeared once `cluster_by`
+was declared and rebuilt, and small tables never fired it.
 
 ## Working out where columns come from
 
@@ -356,20 +358,20 @@ answer (warehouse, project, region, lookback window, and which queries count as 
 deliberately never by your dbt project. The permission preflight is never cached, because
 permissions can change and that check is load-bearing.
 
-Each saved file carries its creation time **and the time-to-keep it was written under** —
+Each saved file carries its creation time **and the time-to-keep it was written under**.
 `--cache-ttl` is not a setting stored anywhere; it persists across sessions only because every
 entry records its own lifetime (`created` + `ttl_hours` inside the JSON file, which lives in
 the OS temp directory and so outlives the terminal session). A later flag-less run judges each
 entry against the entry's own TTL; passing `--cache-ttl` explicitly overrides the stored values
 for that run, in both directions (it can extend or force-shorten). Because the TTL lives in the
-entries, clearing the cache also clears the remembered TTL — the next scan writes fresh entries
+entries, clearing the cache also clears the remembered TTL; the next scan writes fresh entries
 at the default (1 hour) unless the flag is passed again.
 
 Past its time-to-keep an entry counts as a miss, and expired files are swept at the start of
 the next scan by our own code, so cleanup behaves the same on every OS (Windows never clears
 its temp folder on reboot). Clearing by hand has two forms. `dbt-debt --clear-cache` deletes
 the whole cache folder and stops; `dbt-debt scan --clear-cache` clears this project's results
-and then scans fresh. `--no-cache` skips the cache entirely — it neither reads nor writes.
+and then scans fresh. `--no-cache` skips the cache entirely; it neither reads nor writes.
 
 ## Why build a new tool
 

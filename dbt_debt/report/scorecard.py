@@ -273,7 +273,7 @@ def build_scorecard(
     younger than `config.min_age_days` is set aside as "too new to judge" and excluded from
     every unused-derived figure — the count, the removable tests, the exposure and semantic
     impact, and the reclaimable bytes. On Snowflake an unqueried node with no first-seen date
-    at all is set aside the same way (as "missing first-seen date — likely a new table"), since
+    at all is set aside the same way (as "missing a first-seen date, likely a new table"), since
     ACCOUNT_USAGE.TABLES lags behind reality. Queried nodes with at most `config.rare_threshold`
     queries land in the separate rarely-used review band, which feeds none of those figures
     either. `now` is injectable for tests.

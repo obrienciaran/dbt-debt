@@ -128,7 +128,7 @@ def test_render_text_lists_missing_first_seen_nodes_separately() -> None:
     )
     text = render_text(card, detail=True)
     assert "? 1 missing a first-seen date (likely new tables; not counted in 'unused')" in text
-    assert "Missing a first-seen date — likely new tables (1):" in text
+    assert "Missing a first-seen date, likely new tables (1):" in text
     assert "  - just_built  models/jb.sql" in text
     assert "ACCOUNT_USAGE.TABLES lags ~90 minutes" in text
     # The unused list stays clean of it.
@@ -274,7 +274,7 @@ def test_render_text_with_column_section() -> None:
     assert "  ✗ 623 unused" in out
     # The confidence sentence states how much query text the column verdicts saw.
     assert (
-        "  (column verdicts based on 96% of query text — 183 of 190 queries parsed; "
+        "  (column verdicts based on 96% of query text, 183 of 190 queries parsed; "
         "usage verdicts are unaffected)" in out
     )
     assert "  - 600 columns removable" in out

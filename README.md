@@ -10,7 +10,7 @@ every query that has run, and a list of the tables that actually exist. There's 
 and nothing to log into. If `dbt run` works on your machine, `dbt-debt scan` works too, provided
 you have the correct warehouse permissions.
 
-dbt-debt only reports. It never edits or deletes anything.
+👉 dbt-debt only reports. It never edits or deletes anything.
 
 https://github.com/user-attachments/assets/850ba77f-61c8-446e-bf5c-cc49f0225391
 

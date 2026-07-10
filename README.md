@@ -151,7 +151,7 @@ Export / Help — the Help tab lists the scan flags and example commands). When 
 
 | What you run | What you get |
 |---|---|
-| `dbt-debt scan` piped or in CI | a plain summary |
+| `dbt-debt scan` | basic reporting |
 | `dbt-debt scan --print` | the full plain-text report: every unused table, column, and orphan |
 | `dbt-debt scan --format json` | JSON (pipe it to `jq`) |
 | `dbt-debt scan --format json -o debt.json` | JSON written to a file |

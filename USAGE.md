@@ -50,8 +50,8 @@ Two rules keep the orphan counts clean:
 1. **Where we look.** Only datasets dbt builds into are searched. Datasets that just hold raw
    data loaded by something else (Fivetran, Airbyte, a manual load) never are, so raw input
    tables are never flagged.
-2. **How we classify.** An unrecognized table is an undeclared source if a dbt model queries
-   it, an orphan if nothing does.
+2. **How we classify.** An unrecognized table within a dbt project
+   is an undeclared source if a dbt model queries it, or an orphan if nothing does.
 
 ## 🎯 What counts as "usage"
 

@@ -65,8 +65,8 @@ def parse_manifest(data: dict[str, Any]) -> Manifest:
     }
 
     # The semantic layer's three node kinds (dbt 1.6+, manifest v12 top-level keys). Their
-    # shapes follow the published manifest schema; the parsing stays lenient (`get` everywhere)
-    # since we have not verified them against a populated real-world manifest.
+    # shapes are validated against a real populated manifest (dbt 1.11); the parsing stays
+    # lenient (`get` everywhere) because the schema keeps most fields optional.
     semantic_consumers: dict[str, SemanticConsumer] = {}
     for unique_id, node in as_dict(data.get("semantic_models")).items():
         semantic_consumers[unique_id] = _parse_semantic_model(unique_id, node)

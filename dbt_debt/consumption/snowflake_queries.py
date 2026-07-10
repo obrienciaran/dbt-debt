@@ -3,8 +3,7 @@
 The Snowflake analogue of `jobs`: kept free of any Snowflake client so the query shape is
 unit-testable with plain strings, and the row parsers in `jobs` (warehouse-neutral: they read
 rows by key) are reused by the real client. Written from Snowflake's published ACCOUNT_USAGE
-schemas and pinned by tests, but **not yet validated against a live account** — see DESIGN.md's
-flagged inferences.
+schemas, pinned by tests, and validated against a live Enterprise account — see DESIGN.md.
 
 Usage comes from `ACCESS_HISTORY.direct_objects_accessed` — the metadata analogue of BigQuery's
 `referenced_tables` — never from parsing `query_text`: a silently unparseable query would erase

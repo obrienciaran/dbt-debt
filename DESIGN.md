@@ -15,7 +15,7 @@ important layer is `verdict/`. It only does the working-out, on data that has al
 loaded for it. It never talks to a warehouse and never reads files itself. That is what lets us
 test the tricky logic with small hand-written examples and no cloud access at all.
 
-### What lives where (`†` = planned, not built yet)
+### What lives where
 
 ```
 dbt_debt/
@@ -48,7 +48,6 @@ dbt_debt/
   lineage/               # which column feeds which, from one model to the next
     base.py              # the shared interface a lineage source has to provide
     sqlglot_source.py    # the default; reads each model's SQL and traces its columns back upstream
-    fusion_source.py †   # an optional faster source from dbt Fusion (experimental, needs a login)
 
   verdict/               # working-out only; given the data, decide what's unused
     models.py            # a node is unused if it, and everything built from it, went unqueried
@@ -154,8 +153,15 @@ The design decisions, and what remains to confirm:
 - **First-seen comes from `ACCOUNT_USAGE.TABLES` including dropped incarnations**, taking
   `MIN(created)` over all rows for a name and counting rows whose `deleted` is set, so dbt's
   `CREATE OR REPLACE` rebuilds don't reset the age. Same reasoning as BigQuery, where first-seen
-  comes from JOBS rather than TABLES. *Unverified inference:* that dropped incarnations are
-  retained long enough to matter. *Confirmed live:* the guard itself. A brand-new dead model is
+  comes from JOBS rather than TABLES. *Confirmed live:* dropped incarnations are retained. A
+  demo mart rebuilt via `CREATE OR REPLACE` and then dropped outright and rebuilt keeps one
+  `TABLES` row per incarnation (the replaced and dropped ones with `deleted` set), and
+  `first_seen_query()` returns the original creation date throughout; a default scan then
+  files the mart under too-new with that original date, not under missing-first-seen.
+  Retention is not indefinite: Snowflake keeps ACCOUNT_USAGE history for 365 days, so a
+  relation's oldest incarnations age out after a year. Harmless for the guard — any surviving
+  row still dates the relation far past `--min-age-days`, and a relation with no rows at all
+  no longer exists. *Confirmed live too:* the guard itself. A brand-new dead model is
   set aside as too-new at the default `--min-age-days`, its test leaves the removable count, and
   the rarely-used band empties, once `ACCOUNT_USAGE.TABLES` has a row for it. *Decided
   2026-07-10:* `ACCOUNT_USAGE.TABLES` lags reality (documented 90 minutes), so on Snowflake a
@@ -245,9 +251,7 @@ avoids the three usual mistakes. `tests/test_sqlparse.py` pins each one down:
 `UNNEST` and struct/record access aren't tested against real query text yet.
 
 `sqlglot` is the default way we read SQL, and it sits behind a shared interface
-(`lineage/base.py`) so a different one could be swapped in. dbt Fusion could be faster, but its
-column lineage needs a strict mode and looks tied to a dbt-platform account, so it can never be
-a requirement. It stays unbuilt until that's confirmed.
+(`lineage/base.py`) so a different one could be swapped in.
 
 ## Orphans and the source findings
 
@@ -326,10 +330,16 @@ exposures. These declare use; they don't prove it. A dead model that feeds a sem
 through it a metric or saved query, is flagged for review and never revived. A dead column that
 a semantic model names in an entity, dimension, or measure `expr` is *blocked* rather than
 consumed (`verdict/semantic.py` and the blocker check). Real semantic-layer queries hit the
-warehouse and count as observed usage anyway. Two things here are inference, flagged per our
-rule. The semantic-node shapes are parsed from the published v12 manifest schema and not yet
-checked against a populated real-world manifest (the parser stays lenient), and expression
-parsing falls back to "no column refs" when sqlglot can't read an expr.
+warehouse and count as observed usage anyway. The node shapes are validated against a real
+populated manifest (dbt 1.11, manifest v12, via the demo projects' `_semantic.yml`): the three
+top-level keys arrive as `{unique_id: node}` dicts, `depends_on.nodes` chains model →
+semantic model → metric → saved query exactly as the fixpoint expects, and the
+entity/dimension/measure `expr`-with-name-fallback parsing produces the right `column_refs`,
+with no parser change needed. A live scan itemizes all three consumers under a dead model.
+One inference remains, flagged per our rule: expression parsing falls back to "no column
+refs" when sqlglot can't read an expr. One practical note: dbt refuses to parse a project
+with metrics but no MetricFlow time-spine model, so the demos carry a minimal
+`metricflow_time_spine`.
 
 ## Too new to judge
 

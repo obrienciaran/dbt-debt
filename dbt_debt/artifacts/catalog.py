@@ -4,7 +4,7 @@ The manifest only carries columns documented in YAML; the real, complete column 
 from catalog.json (produced by `dbt docs generate`). Each node also carries its warehouse stats,
 so this is where per-relation byte sizes come from when no live BigQuery query is run.
 
-Read as plain JSON, like the manifest — no dbt import.
+Read as plain JSON, like the manifest, with no dbt import.
 """
 
 from __future__ import annotations

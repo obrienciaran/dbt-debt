@@ -2,8 +2,8 @@
 
 Stdlib-only and degradable, the same way the viewer is: it animates on **stderr** only when
 stderr is a real terminal, so piped stdout, JSON, and `-o` output are never touched. A daemon
-thread redraws a single line with a carriage return (`\\r`) and plain ASCII frames — no ANSI
-escapes — so it works on a Windows console without VT just as well as on Unix. When stderr is not
+thread redraws a single line with a carriage return (`\\r`) and plain ASCII frames, with no ANSI
+escapes, so it works on a Windows console without VT just as well as on Unix. When stderr is not
 a TTY (a pipe, a file, CI) `status` is a no-op and starts no thread.
 
 The pure frame helper (`_frame`) is unit-tested without a terminal; the thread loop is exercised

@@ -1,7 +1,7 @@
 """Unused-column verdict: external consumption plus column-lineage propagation. Pure.
 
 The column-grain analogue of `verdict.models`. A column is dead when it has no external
-consumption *and* none of its column-descendants do — so a staging column with zero direct
+consumption *and* none of its column-descendants do, so a staging column with zero direct
 queries stays alive if a queried mart column is built from it.
 
 Equivalently, a column is *alive* if it is externally consumed or an upstream of a consumed

@@ -222,7 +222,7 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
 
     Whole unused models are always listed; the per-column breakdown is added when the column stage
     (`--columns`) ran, so column scans show both grains rather than columns alone. The remaining
-    sections follow the summary's order — sources, docs drift, orphans, the affected
+    sections follow the summary's order: sources, docs drift, orphans, the affected
     semantic-layer consumers, then the removable tests under "potential savings".
     """
 
@@ -306,7 +306,7 @@ def _detail_affected_semantic(consumers: tuple[AffectedConsumer, ...]) -> list[s
 
 
 def _detail_removable_tests(test_ids: tuple[str, ...]) -> list[str]:
-    """Each removable test by unique_id — removable only once the dead asset it guards goes."""
+    """Each removable test by unique_id, removable only once the dead asset it guards goes."""
 
     lines = ["", f"Removable tests ({len(test_ids)}):"]
     lines += [f"  - {test_id}" for test_id in test_ids]
@@ -361,7 +361,7 @@ def _detail_unused_sources(sources: tuple[UnusedSource, ...]) -> list[str]:
 def _query_evidence(query_count: int, last_queried: str | None, bytes_scanned: int) -> str:
     """`  (queried directly: 3 queries, last 2026-07-01, 1.2 GB scanned)` or `  (no queries seen)`.
 
-    The direct-query evidence suffix shared by unused sources and orphaned tables — both are
+    The direct-query evidence suffix shared by unused sources and orphaned tables: both are
     warehouse relations dbt does not read, where observed queries mean "review before dropping".
     """
 
@@ -400,7 +400,7 @@ def _coverage_lines(cov: Coverage) -> list[str]:
 
 
 def _orphan_summary_lines(orphans: OrphanReport) -> list[str]:
-    """The summary `Orphans:` block — count of orphaned relations and undeclared sources."""
+    """The summary `Orphans:` block: count of orphaned relations and undeclared sources."""
 
     lines = ["Orphans:"]
     if orphans.orphans_checked:
@@ -536,7 +536,7 @@ def _format_model(model: DeadModel) -> str:
 
 
 def _format_rare(model: RarelyUsedModel) -> str:
-    """`name (2 queries, last 2026-06-14, 1.2 GB, 3.4 GB scanned)` — the evidence an owner needs.
+    """`name (2 queries, last 2026-06-14, 1.2 GB, 3.4 GB scanned)`: the evidence an owner needs.
 
     The scanned figure is what the few queries read over the window: large against a small
     query count is the "expensive but rarely used" deprecation argument.
@@ -566,8 +566,8 @@ def _format_unpartitioned(table: UnpartitionedTable) -> str:
 def _format_unhealthy(table: UnhealthyTable) -> str:
     """`name (12.0 GB, 42% unsorted, stats 100% stale, 5.2x skew, 3.4 GB scanned)`.
 
-    Only the figures at or above their threshold appear — each one names the maintenance it
-    calls for — and the scanned part is dropped when nothing read the table.
+    Only the figures at or above their threshold appear (each one names the maintenance it
+    calls for), and the scanned part is dropped when nothing read the table.
     """
 
     parts = [humanize_bytes(table.total_bytes)]

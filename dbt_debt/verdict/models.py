@@ -1,6 +1,6 @@
 """Unused-model verdict: usage plus DAG propagation. Pure.
 
-The rule is *not* "no one queried this model" — a staging model with zero direct queries is
+The rule is *not* "no one queried this model". A staging model with zero direct queries is
 still alive if a queried mart descends from it. So a model is dead only when neither it nor any
 descendant was queried.
 

@@ -14,7 +14,7 @@ from dbt_debt.domain import Manifest
 class Graph:
     """Directed dependency graph of buildable-node unique_ids built from `depends_on` edges.
 
-    Covers every node in `Manifest.models` — models, seeds, and snapshots — so a queried mart
+    Covers every node in `Manifest.models` (models, seeds, and snapshots), so a queried mart
     keeps the seed it descends from alive. Dependencies on sources are ignored because usage
     propagation only runs over what dbt builds.
     """

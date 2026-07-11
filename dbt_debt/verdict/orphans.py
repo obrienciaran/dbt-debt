@@ -1,4 +1,4 @@
-"""Orphan and undeclared-source verdicts — pure subtractions over relation-key sets.
+"""Orphan and undeclared-source verdicts from pure subtractions over relation-key sets.
 
 Two findings fall out of comparing the warehouse against the dbt relation set:
 

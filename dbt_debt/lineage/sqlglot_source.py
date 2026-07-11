@@ -1,6 +1,6 @@
 """Baseline column lineage: reconstruct edges from each model's compiled SQL with sqlglot.
 
-Works on every dbt version with no platform login — the compiled SQL is already in the manifest
+Works on every dbt version with no platform login, since the compiled SQL is already in the manifest
 (`compiled_code`) and the column universe in the catalog. For each model we trace every output
 column back to the base columns that feed it, then keep only edges between known models (a
 column fed by a source needs no propagation, since sources are not reported as dead).

@@ -2,7 +2,7 @@
 
 Stdlib-only, no third-party dependency. A Unix backend (`termios`/`tty`) and a Windows backend
 (`msvcrt`, with VT enabled via `ctypes`) feed a shared, pure draw routine; ANSI escapes do the
-rendering. Switching a tab is a re-render of the same in-memory scorecard — no re-scan. When no
+rendering. Switching a tab is a re-render of the same in-memory scorecard, with no re-scan. When no
 interactive terminal is available (piped, CI, or a terminal we can't drive) the caller falls back
 to plain output, so every environment still gets the full report.
 
@@ -129,7 +129,7 @@ def build_views(scorecard: Scorecard, top_n: int) -> list[tuple[str, list[str]]]
     """The three view tabs, each a (label, lines) pair over the same scorecard.
 
     The Summary tab opens with the banner; the Detail tab skips it to stay dense. Lines are kept
-    plain here — colour is applied per line at draw time, after width truncation.
+    plain here, and colour is applied per line at draw time, after width truncation.
     """
 
     summary = [*_BANNER, "", *render_text(scorecard, top_n=top_n).splitlines()]
@@ -268,8 +268,8 @@ def render_frame(
 ) -> str:
     """Build one full-screen frame: tab bar, the visible window of the active view, a status footer.
 
-    Pure — given the views and a terminal size it returns the exact string to write, so the layout
-    and scroll windowing are testable without a terminal.
+    Pure, so given the views and a terminal size it returns the exact string to write, and the
+    layout and scroll windowing are testable without a terminal.
     """
 
     body_h = max(1, height - 4)
@@ -346,7 +346,7 @@ class _UnixReader:
 
     def read_key(self) -> str | None:
         raw = os.read(self._fd, 1)
-        if raw == b"\x1b":  # an escape sequence (arrows, PgUp…) — pull the rest if present
+        if raw == b"\x1b":  # an escape sequence (arrows, PgUp…), pull the rest if present
             while select.select([self._fd], [], [], 0.0006)[0]:
                 raw += os.read(self._fd, 1)
         return _UNIX_KEYS.get(raw)

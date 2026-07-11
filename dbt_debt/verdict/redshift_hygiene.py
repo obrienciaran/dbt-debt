@@ -1,4 +1,4 @@
-"""Large Redshift tables whose maintenance has fallen behind — pure working-out.
+"""Large Redshift tables whose maintenance has fallen behind. Pure working-out.
 
 Flags tables with a big unsorted region (scans stop pruning until VACUUM runs), stale planner
 statistics (ANALYZE resets `stats_off`), or heavy slice skew (one slice becomes the bottleneck),
@@ -9,8 +9,8 @@ by the caller: both manage storage layout automatically and expose no equivalent
 
 Flagging is by the *stored* size carried on the hygiene rows, but ranking puts the tables user
 queries actually scanned the most first (from the usage rows' bytes), falling back to stored
-size — a neglected table only costs query time when queried, so the top of the list is the best
-maintenance candidate, not just the messiest table.
+size, because a neglected table only costs query time when queried, so the top of the list is the
+best maintenance candidate, not just the messiest table.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def unhealthy_tables(
 ) -> tuple[str, ...]:
     """Unique_ids of the largest nodes whose hygiene row trips any maintenance threshold.
 
-    Every buildable node with a hygiene row qualifies — models, seeds, and snapshots are all
+    Every buildable node with a hygiene row qualifies, since models, seeds, and snapshots are all
     physical tables here, and views have no SVV_TABLE_INFO row, so keying on the hygiene map
     filters them naturally. The floor is on the row's own stored size; the ranking is by
     `scanned_bytes` (what user queries read over the window, keyed by relation_key) first,

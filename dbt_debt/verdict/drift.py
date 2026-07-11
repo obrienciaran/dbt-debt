@@ -1,4 +1,4 @@
-"""Documentation-drift verdict — declared YAML columns missing from the physical table.
+"""Documentation-drift verdict for declared YAML columns missing from the physical table.
 
 A column documented in a model's YAML that no longer exists in the built relation (per
 catalog.json) is stale documentation to delete. Both sides are lowercased at parse time, so

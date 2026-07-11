@@ -1,4 +1,4 @@
-"""Test and documentation coverage — pure counting over the manifest (and catalog columns).
+"""Test and documentation coverage from pure counting over the manifest (and catalog columns).
 
 Three hygiene figures, one sentence each in the report: how many buildable nodes have at least
 one test, how many carry a description, and how many columns do. The column denominator prefers

@@ -1,4 +1,4 @@
-"""Large BigQuery tables built without partitioning or clustering — pure manifest working-out.
+"""Large BigQuery tables built without partitioning or clustering. Pure manifest working-out.
 
 On BigQuery both must be declared explicitly in the dbt config (`partition_by` / `cluster_by`),
 so a big table with neither is usually an oversight that makes every scan of it a full scan.
@@ -7,7 +7,7 @@ come from the catalog-derived bytes map, and a floor keeps small projects from b
 wholesale. Snowflake is skipped entirely by the caller: its micro-partitioning is automatic and
 explicit clustering keys are an optional large-table tuning lever, not debt.
 
-Flagging is by *stored* bytes — what the catalog records — but ranking puts the tables user
+Flagging is by *stored* bytes (what the catalog records), but ranking puts the tables user
 queries actually scanned the most first (from the usage rows' bytes), falling back to stored
 size: an unpartitioned table only costs money when queried, so the top of the list is the
 best partitioning candidate, not just the biggest table.
@@ -41,7 +41,7 @@ def unpartitioned_large_tables(
     The floor is on stored size; the ranking is by `scanned_bytes` (what user queries read over
     the window, keyed by relation_key) first, stored size second, ties by unique_id, capped at
     `max_flagged`. Models without a known size are below any positive floor and so never
-    flagged — no catalog, no verdict.
+    flagged, so no catalog means no verdict.
     """
 
     scanned = scanned_bytes or {}

@@ -1,8 +1,8 @@
-"""Unused declared sources — a pure manifest traversal, no warehouse needed.
+"""Unused declared sources, found by a pure manifest traversal with no warehouse needed.
 
 A source is unused when nothing in the project depends on it: no model, seed, snapshot,
 exposure, or semantic-layer consumer names it. Tests attached to the source do not count as
-use — a test guards data, it does not consume it — so a source kept alive only by its own
+use (a test guards data, it does not consume it), so a source kept alive only by its own
 tests is still reported.
 
 This is the mirror image of the undeclared-source finding in `orphans.py`: there a model

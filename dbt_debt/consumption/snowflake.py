@@ -2,7 +2,7 @@
 
 It composes the pure SQL builders in `snowflake_queries` with a live connection and reuses the
 warehouse-neutral row parsers in `jobs`. Imports are lazy so the rest of the package (and the
-test suite, via the fake) loads without the Snowflake dependency or any credentials — the
+test suite, via the fake) loads without the Snowflake dependency or any credentials. The
 connector is an optional extra (`pip install 'dbt-debt[snowflake]'`).
 
 Validated against a live Enterprise account (see DESIGN.md). Known documented caveats:

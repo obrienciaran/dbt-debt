@@ -166,7 +166,7 @@ The design decisions, and what remains to confirm:
   `first_seen_query()` returns the original creation date throughout; a default scan then
   files the mart under too-new with that original date, not under missing-first-seen.
   Retention is not indefinite: Snowflake keeps ACCOUNT_USAGE history for 365 days, so a
-  relation's oldest incarnations age out after a year. Harmless for the guard — any surviving
+  relation's oldest incarnations age out after a year. Harmless for the guard, because any surviving
   row still dates the relation far past `--min-age-days`, and a relation with no rows at all
   no longer exists. *Confirmed live too:* the guard itself. A brand-new dead model is
   set aside as too-new at the default `--min-age-days`, its test leaves the removable count, and
@@ -182,8 +182,8 @@ The design decisions, and what remains to confirm:
   `REGEXP_COUNT(...) = 0`, because Snowflake's `REGEXP_LIKE` anchors to the whole string.
   *Confirmed live:* dbt's builds are correctly excluded from usage counts.
 - **Table sizes come live from `ACCOUNT_USAGE.TABLE_STORAGE_METRICS`** (same grant as the rest
-  of ACCOUNT_USAGE, so no new permission), replacing the catalog sizes where a row exists —
-  warehouse truth with no `dbt docs generate` needed. Each relation's active bytes drive the
+  of ACCOUNT_USAGE, so no new permission), replacing the catalog sizes where a row exists,
+  giving warehouse truth with no `dbt docs generate` needed. Each relation's active bytes drive the
   size and reclaimable figures; the time-travel and fail-safe bytes still billed for it are
   summed over every incarnation, dropped ones included, and shown next to each unused table.
   Reported as bytes rather than dollars, since storage rates vary by contract and region.
@@ -204,7 +204,7 @@ The design decisions, and what remains to confirm:
 
 ## Redshift
 
-Built to the same recipe as Snowflake — one pure query-builder module
+Built to the same recipe as Snowflake, with one pure query-builder module
 (`consumption/redshift_queries.py`), one lazy SDK client (`consumption/redshift.py`, the
 `[redshift]` optional extra, `redshift-connector`), and the sqlglot `redshift` dialect. The
 SYS system views the scan reads work on both Serverless workgroups and provisioned clusters.
@@ -215,20 +215,20 @@ queries, dbt-build exclusion, the orphan with direct-query evidence and scanned 
 too-new guard on dbt-built relations, the result-cache join, SVV_TABLE_INFO sizes on the
 scorecard, the stale-source skip note (fired once the demo declared its `raw.raw_events`
 source, which itself lands under unused declared sources with its one direct query and
-scanned bytes), and the table-hygiene check (ran and returned empty, rendering nothing —
+scanned bytes), and the table-hygiene check (ran and returned empty, rendering nothing,
 the healthy state on Serverless), exit 0 end to end.
 
 The design decisions, and what the live scans showed:
 
 - **Usage comes from `SYS_QUERY_DETAIL` scan steps joined to `SYS_QUERY_HISTORY`.**
   SYS_QUERY_HISTORY alone has no per-table column, but each scan step in SYS_QUERY_DETAIL
-  names the relation it read as a fully qualified `database.schema.table` — the engine-metadata
+  names the relation it read as a fully qualified `database.schema.table`, the engine-metadata
   analogue of `referenced_tables` and ACCESS_HISTORY, so usage never comes from parsing query
   text. The optimizer's own temp tables (`volt_tt_*`) and the system schemas are filtered out.
   *Confirmed live:* the three-part `table_name` shape, and per-relation counts matching the
   planted worksheet queries exactly.
 - **Result-cache hits are followed to the originating query.** A cache-hit SELECT runs no scan
-  steps, so counting scan steps alone would miss it — the dangerous direction, use looking like
+  steps, so counting scan steps alone would miss it, the dangerous direction, use looking like
   disuse. `SYS_QUERY_HISTORY.result_cache_query_id` names the originating query, so the usage
   join goes through `COALESCE(NULLIF(result_cache_query_id, 0), query_id)` and a cached repeat
   counts as use of the tables the original query read. *Confirmed live:* an identical repeat
@@ -242,21 +242,21 @@ The design decisions, and what the live scans showed:
   only.
 - **dbt builds surface under `__dbt_tmp` names, folded back in first-seen.** dbt-redshift
   builds each table as `<name>__dbt_tmp` and renames it into place, and the rename is DDL
-  that SYS_QUERY_DETAIL records under no name (found live) — so the first-seen query strips
+  that SYS_QUERY_DETAIL records under no name (found live), so the first-seen query strips
   that suffix, letting the tmp incarnation date the final relation. Without it, dbt-built
   tables get no first-seen row and the too-new guard never protects them. One residual edge,
   also found live: a CTAS whose plan scans no base table (the demo's recursive-CTE time
   spine) is logged as plain `DDL` with *no* named steps at all, so such a relation still has
-  no first-seen date and is judged like BigQuery's zero-jobs case — a fresh model built that
+  no first-seen date and is judged like BigQuery's zero-jobs case, so a fresh model built that
   way can be called unused before `--min-age-days` passes.
 - **SYS timestamps arrive naive.** The views report UTC as `timestamp without time zone`, so
   the driver hands back naive datetimes (found live; BigQuery and Snowflake return aware
-  ones). The client stamps UTC on them at its boundary — the verdicts compare against aware
+  ones). The client stamps UTC on them at its boundary, since the verdicts compare against aware
   `now` values.
 - **Retention caps the window.** AWS documents seven days of history for the older STL views
   and leaves the SYS views' retention unstated. Whatever it is, it bounds both the effective
   `--lookback-days` and how far back `first_seen` can reach, making "unused" a weaker signal
-  on Redshift than elsewhere — documented rather than worked around. First-seen still comes
+  on Redshift than elsewhere, documented rather than worked around. First-seen still comes
   from the query history, never `SVV_TABLE_INFO.create_time`, which resets on every rebuild.
   A dead node with no first-seen row means no jobs within retention and is judged normally,
   like BigQuery; the missing-first-seen set-aside stays Snowflake-only (lagging metadata is
@@ -272,10 +272,10 @@ The design decisions, and what the live scans showed:
   replacing catalog sizes where a row exists, like Snowflake's storage metrics. Redshift has
   no time-travel or fail-safe retention, so those fields stay zero and the report shows no
   retained-bytes breakdown. SVV_TABLE_INFO omits empty tables, which then keep their catalog
-  size. *Confirmed live:* the sizes land on the scorecard (a 6-row table reports 35 MB — 
+  size. *Confirmed live:* the sizes land on the scorecard (a 6-row table reports 35 MB, since
   Redshift's 1 MB-block floor per column slice makes tiny tables look large; the ranking is
   still right).
-- **Orphans read `SVV_REDSHIFT_TABLES`**, filtered by database and lowercased schema —
+- **Orphans read `SVV_REDSHIFT_TABLES`**, filtered by database and lowercased schema,
   deliberately not SVV_TABLE_INFO, which omits empty tables, and an empty leftover is still an
   orphan.
 - **The stale-source check is skipped with a note.** Redshift exposes no last-data-received
@@ -284,7 +284,7 @@ The design decisions, and what the live scans showed:
   rule, so the check is gated off in the CLI the way the partitioning check is BigQuery-only.
   `SYS_LOAD_HISTORY` was considered and rejected: it records only `COPY` loads (tables fed by
   `INSERT`, CTAS, or streaming leave no row), and its retention is the same unmeasured SYS
-  window — if that window is shorter than `--stale-source-days`, any table with a row was
+  window; if that window is shorter than `--stale-source-days`, any table with a row was
   loaded within retention and can never look stale, so the check could never fire. Revisit
   only if the retention measurement shows a window comfortably longer than the threshold.
   *Confirmed live:* with a declared source in the manifest, the scan prints the skip note on
@@ -300,14 +300,14 @@ The design decisions, and what the live scans showed:
   check. It flags tables of 1 GiB or more (at most 20) whose `unsorted` region is 20% or
   larger (scans stop pruning until VACUUM runs), whose `stats_off` is 10 or more (stale
   planner statistics; ANALYZE resets it), or whose `skew_rows` ratio is 4 or more (one slice
-  becomes the bottleneck) — AWS's own maintenance lines, held as module constants rather than
+  becomes the bottleneck), AWS's own maintenance lines, held as module constants rather than
   flags. Ranking is by the bytes user queries scanned from each table (stored size as the
   fallback), so the top entry is the maintenance fix that saves the most. The columns can be
   NULL (no sortable data, zero rows, DISTSTYLE ALL) and parse as 0, which never trips a
   threshold, and an empty result renders as nothing: on Serverless and modern provisioned
   clusters automatic vacuum and analyze usually keep every figure near zero, so an empty
-  check is the healthy state, not a failure. The rejected alternative — ranking raw
-  sort/distribution-key declarations like the partitioning check ranks `partition_by` —
+  check is the healthy state, not a failure. The rejected alternative, ranking raw
+  sort/distribution-key declarations like the partitioning check ranks `partition_by`,
   stays rejected: Redshift assigns both automatically, so a bare declaration is not debt;
   only measured neglect is. Review-only, one extra system-view read, and it never feeds any
   unused figure. *Confirmed live:* on the Serverless demo the check runs and returns empty
@@ -321,8 +321,8 @@ Between active and unused sits a third verdict (`verdict/rarity.py`). A model qu
 `--rare-threshold` times (default 5) in the window is **rarely used**. It is reported with its
 query count, last-queried date, size, and the bytes its queries scanned, and it is never folded
 into any unused-derived figure, because observed use is use. The band is ranked by scanned
-bytes first (stored size as the fallback), so the expensive-but-rarely-used model — the
-strongest deprecation candidate — tops the list. The too-new guard applies to the band
+bytes first (stored size as the fallback), so the expensive-but-rarely-used model, the
+strongest deprecation candidate, tops the list. The too-new guard applies to the band
 the same way it applies to the dead set (a model created mid-window hasn't had a full window to
 accumulate queries). The usage counts were always fetched; this band just stops discarding them.
 
@@ -331,10 +331,10 @@ The scanned bytes come from one extra column in the existing usage queries
 cost no extra warehouse call. They are reported as bytes, never dollars: bytes map directly to
 money only on BigQuery on-demand pricing, and any dollar figure would be a guess. A query
 touching several tables attributes its whole figure to each, so the numbers rank tables rather
-than bill them, and they are a review signal only — no usage verdict ever depends on them. The
+than bill them, and they are a review signal only, with no usage verdict ever depending on them. The
 same figure backs the direct-query evidence on unused declared sources and on orphaned
 relations: each orphan carries any query count, last-queried date, and scanned bytes from the
-same usage rows, and the still-queried ones — the dangerous-to-drop ones — rank first. The
+same usage rows, and the still-queried ones (the dangerous-to-drop ones) rank first. The
 signal is validated
 live on both warehouses: the rare band's counts, dates, and scanned bytes match the queries run
 against the demos, and the ranking follows bytes rather than query count. One trap the live run

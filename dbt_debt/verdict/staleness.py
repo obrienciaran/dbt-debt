@@ -1,4 +1,4 @@
-"""Stale-source verdict — a pure comparison of declared sources against last-modified dates.
+"""Stale-source verdict. A pure comparison of declared sources against last-modified dates.
 
 A declared source whose table has received no new data for longer than the threshold means
 the loader upstream of dbt has likely stopped. The last-modified dates come from warehouse

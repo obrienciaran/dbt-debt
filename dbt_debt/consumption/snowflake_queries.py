@@ -3,11 +3,12 @@
 The Snowflake analogue of `jobs`: kept free of any Snowflake client so the query shape is
 unit-testable with plain strings, and the row parsers in `jobs` (warehouse-neutral: they read
 rows by key) are reused by the real client. Written from Snowflake's published ACCOUNT_USAGE
-schemas, pinned by tests, and validated against a live Enterprise account — see DESIGN.md.
+schemas, pinned by tests, and validated against a live Enterprise account. See DESIGN.md.
 
-Usage comes from `ACCESS_HISTORY.direct_objects_accessed` — the metadata analogue of BigQuery's
-`referenced_tables` — never from parsing `query_text`: a silently unparseable query would erase
-evidence of use and produce false "unused" verdicts. ACCESS_HISTORY requires Enterprise edition
+Usage comes from `ACCESS_HISTORY.direct_objects_accessed` (the metadata analogue of BigQuery's
+`referenced_tables`), never from parsing `query_text`, since a silently unparseable query would
+erase evidence of use and produce false "unused" verdicts. ACCESS_HISTORY requires Enterprise
+edition
 (and IMPORTED PRIVILEGES on the SNOWFLAKE database); the preflight fails loudly on Standard.
 """
 
@@ -33,7 +34,7 @@ def exclusion_clause(query_comment_pattern: str, column: str = "query_text") -> 
     Snowflake's `REGEXP_LIKE` implicitly anchors to the whole subject, so the unanchored
     `REGEXP_COUNT(...) = 0` expresses "does not contain" directly. The pattern is wrapped in a
     dollar-quoted string, Snowflake's no-escape literal, so its backslashes and quotes survive
-    verbatim — the analogue of BigQuery's raw triple-quoted string.
+    verbatim, the analogue of BigQuery's raw triple-quoted string.
     """
 
     validate_query_comment_pattern(query_comment_pattern)
@@ -69,7 +70,7 @@ def table_usage_query(lookback_days: int, exclusion: str) -> str:
     success / window / dbt-exclusion filters. `objectName` is already the fully qualified
     `DATABASE.SCHEMA.TABLE`, lowercased into the canonical relation_key. The caller builds
     `exclusion` against `qh.query_text`. `bytes_scanned` is the query's whole figure, so a
-    query touching several tables attributes it to each — a ranking signal, not billing.
+    query touching several tables attributes it to each, a ranking signal and not billing.
     """
 
     return f"""
@@ -109,7 +110,7 @@ def first_seen_query() -> str:
     """The earliest creation of each relation ever recorded, for the too-new guard.
 
     `ACCOUNT_USAGE.TABLES` retains dropped incarnations (rows with `deleted` set), so
-    `MIN(created)` over *all* rows survives dbt's `CREATE OR REPLACE` rebuilds — the same reason
+    `MIN(created)` over *all* rows survives dbt's `CREATE OR REPLACE` rebuilds, the same reason
     the BigQuery side reads JOBS rather than the live TABLES view, whose creation time resets on
     every rebuild. Deliberately unwindowed: the question is "when did this relation first
     exist", and ACCOUNT_USAGE already bounds its own retention.
@@ -150,7 +151,7 @@ def source_last_modified_query(datasets: Iterable[str]) -> str:
 
     Reads `ACCOUNT_USAGE.TABLES` (already required for first-seen, so no new grant), taking
     `MAX(last_altered)` over the live rows per relation. Documented caveat: `last_altered`
-    also moves on DDL, so a table can look fresher than its data — the check under-reports
+    also moves on DDL, so a table can look fresher than its data; the check under-reports
     staleness, never over-reports use. Comparison is on lowercased `database.schema` keys,
     matching the relation_key normalization; each identifier is validated against injection.
     """

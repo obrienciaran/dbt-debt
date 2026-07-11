@@ -19,9 +19,9 @@ ColumnRef = tuple[str, str]
 def relation_key(database: str | None, schema: str | None, identifier: str | None) -> str:
     """Canonical `project.dataset.table` join key for a warehouse relation.
 
-    Both sides of the usage join produce this from their own components — a model from its
-    database/schema/alias, a BigQuery `referenced_tables` entry from its project/dataset/table
-    — so the key matches without parsing dbt's quoted `relation_name`. Backticks and quotes are
+    Both sides of the usage join produce this from their own components (a model from its
+    database/schema/alias, a BigQuery `referenced_tables` entry from its project/dataset/table),
+    so the key matches without parsing dbt's quoted `relation_name`. Backticks and quotes are
     stripped and the whole key is lowercased so the two sides compare equal regardless of how
     each source quoted or cased the identifier.
     """
@@ -32,7 +32,7 @@ def relation_key(database: str | None, schema: str | None, identifier: str | Non
 
 @dataclass
 class Model:
-    """A buildable dbt node — a model, seed, or snapshot — and its declared metadata.
+    """A buildable dbt node (a model, seed, or snapshot) and its declared metadata.
 
     All three kinds share the same usage question ("did anything query what this builds?"),
     so they share one type, told apart by `resource_type`; a seed simply has no SQL and no
@@ -43,7 +43,7 @@ class Model:
     consumption layer; it is derived from `database`/`schema`/`alias`, so we never parse dbt's
     quoted `relation_name`.
 
-    `columns` holds the names documented in YAML, lowercased at parse time — the same
+    `columns` holds the names documented in YAML, lowercased at parse time: the same
     normalization `relation_key` applies to relations, so column names compare equal across the
     manifest, the catalog, and parsed query text. The full physical column list comes from
     catalog.json.
@@ -83,7 +83,7 @@ class UsageRow:
     Produced by the consumption layer (dbt's own queries already excluded). `relation_key` is
     the canonical join key (see `relation_key`); `query_count` and `last_queried` quantify and
     date the consumption that keeps a model alive. `bytes_scanned` sums what those queries
-    read (BigQuery `total_bytes_processed`, Snowflake `bytes_scanned`) — a cost signal for the
+    read (BigQuery `total_bytes_processed`, Snowflake `bytes_scanned`), a cost signal for the
     review lists only, never an input to any usage verdict. A query touching several tables
     attributes its whole figure to each, so sums across tables overlap.
     """
@@ -114,7 +114,7 @@ class TableStorage:
     `active_bytes` is the live data; `time_travel_bytes` and `failsafe_bytes` are the retained
     copies still billed after changes and drops. Snowflake fills all three from
     `ACCOUNT_USAGE.TABLE_STORAGE_METRICS`; Redshift has no retained copies, so `SVV_TABLE_INFO`
-    fills active bytes and the rest stay zero. Always bytes, never dollars — rates vary by
+    fills active bytes and the rest stay zero. Always bytes, never dollars, since rates vary by
     contract and region. BigQuery has no equivalent surface, so its sizes come from
     catalog.json alone.
     """
@@ -147,7 +147,7 @@ class ColumnEdge:
     """A column-lineage edge: `upstream` feeds `downstream` (data flows upstream → downstream).
 
     Both ends are `(model unique_id, column)` refs. Used to keep an unqueried column alive when
-    a downstream column built from it is consumed — the column-grain analogue of the model DAG.
+    a downstream column built from it is consumed: the column-grain analogue of the model DAG.
     """
 
     upstream: ColumnRef
@@ -159,7 +159,7 @@ class Test:
     """A dbt test node and what it guards.
 
     `attached_node` / `column_name` let us mark a test removable when the model or column it
-    guards is dead — a pure manifest traversal, no warehouse needed. `column_name` is lowercased
+    guards is dead: a pure manifest traversal, no warehouse needed. `column_name` is lowercased
     at parse time so it compares equal to the normalized dead-column refs.
     """
 
@@ -178,7 +178,7 @@ class Test:
 class Exposure:
     """A declared external consumer of one or more models.
 
-    Exposures depend on models, not columns, and only capture *declared* uses — so they
+    Exposures depend on models, not columns, and only capture *declared* uses, so they
     undercount real consumption, which the query-log layer fills in. The two are complementary.
     """
 
@@ -189,12 +189,12 @@ class Exposure:
 
 @dataclass(frozen=True)
 class SemanticConsumer:
-    """A semantic-layer node — a semantic model, metric, or saved query — that consumes models.
+    """A semantic-layer node (a semantic model, metric, or saved query) that consumes models.
 
     Like exposures these capture *declared* use: a dead model feeding one is flagged for review
     rather than removable, and a column a semantic model names is blocked rather than consumed.
     `depends_on` holds the raw manifest deps (model, semantic-model, or metric unique_ids);
-    `column_refs` is resolved to (model unique_id, column) pairs for semantic models only —
+    `column_refs` is resolved to (model unique_id, column) pairs for semantic models only;
     metrics and saved queries reference columns indirectly through their semantic models.
     """
 
@@ -255,7 +255,7 @@ class Manifest:
     def dbt_relation_keys(self) -> set[str]:
         """Every warehouse relation dbt defines: models, seeds, snapshots, and sources.
 
-        The subtraction set for orphan discovery — a physical table whose key is in here is
+        The subtraction set for orphan discovery: a physical table whose key is in here is
         accounted for by dbt and is never an orphan or an undeclared source.
         """
 
@@ -264,7 +264,7 @@ class Manifest:
         return keys
 
     def managed_datasets(self) -> set[str]:
-        """Dataset (schema) names dbt materializes into — where orphans are looked for.
+        """Dataset (schema) names dbt materializes into, where orphans are looked for.
 
         Drawn from the buildable nodes (models, seeds, snapshots); source datasets are excluded
         because dbt only reads them, so unmanaged tables there are not orphans. Quotes are
@@ -276,7 +276,7 @@ class Manifest:
         return {schema.strip(' `"') for schema in schemas if schema}
 
     def source_datasets(self) -> set[str]:
-        """`database.schema` keys for the declared sources — where staleness metadata is read.
+        """`database.schema` keys for the declared sources, where staleness metadata is read.
 
         Quotes are stripped but case is preserved, matching `managed_datasets`: on BigQuery
         these name a dataset-qualified metadata table and dataset ids are case-sensitive.

@@ -82,8 +82,8 @@ A few cases to keep in mind:
   likely a new table"), because `ACCOUNT_USAGE.TABLES` lags about 90 minutes behind reality.
 - **Semantic-layer declarations.** Models feeding a semantic model, metric, or saved query are
   flagged for review when unused (like exposures), and columns a semantic model names are never
-  counted as removable. Each affected consumer is reported with its cause — the unused model it
-  is built on, or the affected consumer it reads through — in the summary and in a detail
+  counted as removable. Each affected consumer is reported with its cause (the unused model it
+  is built on, or the affected consumer it reads through) in the summary and in a detail
   section of its own.
 - **`SELECT *`** counts every column as used, so a column read only through a `*` is never
   wrongly called unused.
@@ -129,7 +129,7 @@ in the project your models live in (read from your project, or set with `--proje
 - **Required.** Permission to see everyone's queries, not just your own
   (`bigquery.jobs.listAll`, part of `roles/bigquery.resourceViewer`). dbt-debt checks this up
   front and stops if it's missing; otherwise "unused" would mean "unused by me".
-- **Optional, for orphans.** Read access to the datasets dbt builds into — the basic access
+- **Optional, for orphans.** Read access to the datasets dbt builds into, the basic access
   anyone who writes dbt models already has. Without it, the orphan list is skipped with a
   warning and the rest of the scan is unaffected.
 - **Optional, for stale sources.** Read access to the datasets your sources live in, where the
@@ -212,7 +212,7 @@ again later, or with `--no-cache`, and it settles into a normal verdict.
 ### Redshift
 
 Install the optional connector (`pip install 'dbt-debt[redshift]'`) and set the connection as
-environment variables — there is no connections file:
+environment variables, since there is no connections file:
 
 ```
 export REDSHIFT_HOST=<workgroup or cluster endpoint>
@@ -248,8 +248,8 @@ The same `SVV_TABLE_INFO` read feeds a Redshift-only table-hygiene check: a tabl
 more is flagged when its unsorted region reaches 20% (needs VACUUM), its `stats_off` reaches
 10 (stale planner statistics; needs ANALYZE), or its slice-skew ratio reaches 4 (worth a
 distribution-key review), listed most-scanned-bytes first so the top entry is the fix that
-saves the most. Automatic vacuum and analyze — always on for Serverless and the default on
-provisioned clusters — usually keep every figure near zero, so the section simply not
+saves the most. Automatic vacuum and analyze (always on for Serverless and the default on
+provisioned clusters) usually keep every figure near zero, so the section simply not
 appearing is the healthy state.
 
 ## ⚙️ Options
@@ -310,7 +310,7 @@ temp folder until something removes it:
 - `dbt-debt --clear-cache` deletes all of dbt-debt's saved results and does nothing else;
 - `dbt-debt scan --clear-cache` deletes this project's results, then runs a fresh scan;
 - the next scan replaces results over an hour old;
-- or your OS clears its temp folder — slow and unpredictable (Windows may never do it), so
+- or your OS clears its temp folder, which is slow and unpredictable (Windows may never do it), so
   don't count on it.
 
 For a clean slate, run `dbt-debt --clear-cache`.

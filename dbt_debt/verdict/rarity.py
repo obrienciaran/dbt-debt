@@ -1,8 +1,8 @@
-"""The "rarely used" band — queried within the window, but barely.
+"""The "rarely used" band of models queried within the window, but barely.
 
 A third bucket between active and unused: these models have observed use, so none of the
 unused-derived figures (removable tests, consumer impact, reclaimable bytes) ever include
-them — the band is a review list, sized and dated so an owner can judge whether the few
+them. The band is a review list, sized and dated so an owner can judge whether the few
 remaining queries still earn the model's keep. Pure working-out over the usage map.
 """
 
@@ -17,7 +17,7 @@ def rarely_used_models(usage: Mapping[str, UsageRow], threshold: int) -> set[str
     """Queried models with at most `threshold` queries in the window.
 
     A zero (or negative) `threshold` disables the band. Models with no usage at all are the
-    dead set's business, not this one's — the caller also subtracts the too-new set, since a
+    dead set's business, not this one's, and the caller also subtracts the too-new set, since a
     model created mid-window has not had a full window to accumulate queries.
     """
 

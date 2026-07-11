@@ -168,7 +168,7 @@ def _parse_semantic_model(unique_id: str, node: dict[str, Any]) -> SemanticConsu
     """Parse one semantic model, resolving its entity/dimension/measure exprs to column refs.
 
     Each element's `expr` (falling back to its `name`) names the columns it reads; those are
-    paired with every model the semantic model depends on — usually exactly one. Expressions
+    paired with every model the semantic model depends on, usually exactly one. Expressions
     that fail to parse contribute no refs, which is conservative: the model-grain flag still
     protects the model itself.
     """

@@ -85,7 +85,7 @@ class WarehouseClient(Protocol):
 
         Redshift reads the `SVV_TABLE_INFO` maintenance columns (unsorted region, statistics
         staleness, slice skew); BigQuery and Snowflake manage these automatically, expose no
-        equivalent, and return an empty dict — the CLI only calls this on Redshift.
+        equivalent, and return an empty dict, since the CLI only calls this on Redshift.
         """
         ...
 

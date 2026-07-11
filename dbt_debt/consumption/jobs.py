@@ -2,9 +2,9 @@
 
 Kept free of any BigQuery client so the query shape and parsing are unit-testable with plain
 dicts. The real client (`bigquery`) builds the SQL here, runs it, and feeds the rows back to
-these parsers. Rows are read by key, so both `google.cloud.bigquery.Row` and dicts work — which
-also makes the parsers warehouse-neutral: the Snowflake client feeds them rows from the queries
-in `snowflake_queries`, whose result columns carry the same names.
+these parsers. Rows are read by key, so both `google.cloud.bigquery.Row` and dicts work, which
+also makes the parsers warehouse-neutral, so the Snowflake client can feed them rows from the
+queries in `snowflake_queries`, whose result columns carry the same names.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def _region_dataset(region: str) -> str:
 def _user_select_filter(lookback_days: int, exclusion_clause: str) -> str:
     """The shared `WHERE` predicate: completed, error-free user `SELECT`s within the window.
 
-    Both JOBS queries count the same thing — non-dbt `SELECT`s a human or BI tool ran — so the
+    Both JOBS queries count the same thing (non-dbt `SELECT`s a human or BI tool ran), so the
     window, statement-type, success, and dbt-exclusion filters live here in one place.
     """
 
@@ -52,7 +52,7 @@ def table_usage_query(region: str, lookback_days: int, exclusion_clause: str) ->
     elsewhere). Each `referenced_tables` entry a job touched becomes one counted row; dbt's own
     queries are removed by `exclusion_clause`, and only completed, error-free `SELECT`s count.
     `total_bytes_processed` is the job's whole figure, so a job referencing several tables
-    attributes it to each — good enough for ranking, not for exact billing.
+    attributes it to each, good enough for ranking but not for exact billing.
     """
 
     return f"""
@@ -87,8 +87,8 @@ GROUP BY query
 def first_seen_query(region: str, lookback_days: int) -> str:
     """The earliest job that touched each relation in the window, for the too-new guard.
 
-    Deliberately unfiltered — every statement type, dbt's own builds included — because the
-    question is "when did this relation first exist", not "who used it": an old model rebuilt
+    Deliberately unfiltered (every statement type, dbt's own builds included) because the
+    question is "when did this relation first exist", not "who used it". An old model rebuilt
     nightly then has builds throughout the window, while a model created mid-window first
     appears mid-window. Both `referenced_tables` and `destination_table` are unioned in, since
     a CTAS/dbt build reliably records the created table in `destination_table` (its presence
@@ -125,7 +125,7 @@ def existing_relations_query(project: str, datasets: Iterable[str]) -> str:
 
     Reads each managed dataset's own `INFORMATION_SCHEMA.TABLES` (dataset-qualified) and unions
     them, rather than the region-wide view. The dataset-scoped view needs only read access to that
-    dataset — which a dbt user already has — whereas the region-wide view needs a project-level
+    dataset, which a dbt user already has, whereas the region-wide view needs a project-level
     grant that even an Owner can be refused. The project and each dataset name are validated
     against injection; dataset case is preserved because BigQuery dataset ids are case-sensitive.
     """
@@ -151,7 +151,7 @@ def source_last_modified_query(datasets: Iterable[str]) -> str:
 
     Reads each dataset's legacy `__TABLES__` metadata table, whose `last_modified_time`
     (epoch milliseconds) is updated by loads and streaming writes alike, and which needs only
-    read access to that dataset — the same optional grant as orphan discovery. Source datasets
+    read access to that dataset, the same optional grant as orphan discovery. Source datasets
     can live in other GCP projects, hence the project-qualified keys. (Inference to confirm
     live: `__TABLES__` is a legacy surface, readable from standard SQL.)
     """

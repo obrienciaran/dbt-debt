@@ -60,7 +60,7 @@ The **lookback window** is how far back we read the warehouse's query log: 180 d
 which is also the most BigQuery keeps. Snowflake keeps a year, so `--lookback-days` can go up
 to 365 there. Redshift's SYS query-history views keep much less (AWS leaves the exact
 retention unstated; the older STL views keep seven days), so on Redshift the effective window
-is however much history the account actually retains — "unused" there means "unused within
+is however much history the account actually retains, so "unused" there means "unused within
 that history".
 
 - **active / unused models.** A model is **unused** if, in the window, nothing queried it and
@@ -136,7 +136,7 @@ that history".
   `SVV_TABLE_INFO` row shows a big unsorted region (20%+, needs VACUUM), stale planner
   statistics (`stats_off` 10+, needs ANALYZE), or heavy slice skew (4x+, needs a
   distribution-key review). Listed with stored size and the bytes user queries scanned, most
-  scanned first. Automatic vacuum and analyze usually keep this list empty — an empty list is
+  scanned first. Automatic vacuum and analyze usually keep this list empty, and an empty list is
   the healthy state, and BigQuery and Snowflake maintain storage layout themselves.
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage
   you'd reclaim; on Snowflake and Redshift the sizes come live from the warehouse (no

@@ -2,7 +2,7 @@
 
 A model's compiled SQL names its upstreams as fully-qualified relations (dbt renders `ref()` and
 `source()` to `project.dataset.table`). Collecting those references lets us spot relations a model
-depends on that dbt has no node for — an *undeclared source* — without any warehouse access. Pure:
+depends on that dbt has no node for (an *undeclared source*) without any warehouse access. Pure:
 manifest in, relation keys out.
 """
 

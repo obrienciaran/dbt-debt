@@ -3,13 +3,13 @@
 The Redshift analogue of `jobs` and `snowflake_queries`: kept free of any Redshift client so
 the query shape is unit-testable with plain strings, and the row parsers in `jobs`
 (warehouse-neutral: they read rows by key) are reused by the real client. Written from AWS's
-published system-view schemas and validated live against a Serverless workgroup — see
+published system-view schemas and validated live against a Serverless workgroup. See
 DESIGN.md's Redshift section for what is confirmed and what remains open.
 
 Usage comes from `SYS_QUERY_DETAIL` scan steps, whose `table_name` records each relation a
-query physically read — the engine-metadata analogue of BigQuery's `referenced_tables` and
-Snowflake's ACCESS_HISTORY — never from parsing `query_text`: a silently unparseable query
-would erase evidence of use and produce false "unused" verdicts. A result-cache hit runs no
+query physically read (the engine-metadata analogue of BigQuery's `referenced_tables` and
+Snowflake's ACCESS_HISTORY), never from parsing `query_text`, since a silently unparseable
+query would erase evidence of use and produce false "unused" verdicts. A result-cache hit runs no
 scan steps, so the usage join follows `result_cache_query_id` back to the originating query;
 cached repeats still count as use. Both SYS views work on serverless workgroups and
 provisioned clusters, but they only keep a bounded history (AWS documents seven days for the
@@ -50,7 +50,7 @@ def exclusion_clause(query_comment_pattern: str, column: str = "query_text") -> 
     Redshift supports both `REGEXP_COUNT` and dollar-quoted string literals, so this is the
     same "does not contain" form as Snowflake's: the pattern's backslashes and quotes survive
     verbatim inside `$$...$$`. `SYS_QUERY_HISTORY.query_text` is truncated at 4000 characters,
-    which is harmless here — dbt's query-comment leads the statement.
+    which is harmless here, because dbt's query-comment leads the statement.
     """
 
     validate_query_comment_pattern(query_comment_pattern)
@@ -61,7 +61,7 @@ def permission_probe_query() -> str:
     """The preflight: prove the caller sees *all* users' rows in the SYS views.
 
     Redshift lets every user select from SYS_QUERY_HISTORY but silently filters it to their
-    own queries unless they are a superuser or hold SYSLOG ACCESS UNRESTRICTED — the failure
+    own queries unless they are a superuser or hold SYSLOG ACCESS UNRESTRICTED, the failure
     mode where "unused" would mean "unused by me". The probe returns a row only when the
     current user has one of those, so the client treats an empty result as a missing
     permission, not a passed check.
@@ -101,7 +101,7 @@ def table_usage_query(lookback_days: int, exclusion: str) -> str:
     hits (which run no scan steps of their own) still count as use of the tables the original
     query read. The caller builds `exclusion` against `qh.query_text`. Unlike BigQuery and
     Snowflake, `bytes_scanned` here is per table (the scan steps' output bytes), and a cached
-    repeat re-attributes the originating scan's bytes — a ranking signal, not billing.
+    repeat re-attributes the originating scan's bytes, a ranking signal and not billing.
     """
 
     return f"""
@@ -141,15 +141,15 @@ GROUP BY query_text
 def first_seen_query() -> str:
     """The earliest query that touched each relation on record, for the too-new guard.
 
-    Deliberately unfiltered — every statement type and step, dbt's own builds included —
+    Deliberately unfiltered (every statement type and step, dbt's own builds included)
     because the question is "when did this relation first exist", not "who used it". Reads
     the job history rather than table metadata (`SVV_TABLE_INFO.create_time` resets on every
     dbt rebuild, like BigQuery's `TABLES.creation_time`). Deliberately unwindowed: the SYS
     views bound their own retention, and that retention caps how far back first-seen can
-    reach — a documented Redshift caveat.
+    reach, a documented Redshift caveat.
 
     dbt-redshift builds each table as `<name>__dbt_tmp` and renames it into place, and the
-    rename is DDL that SYS_QUERY_DETAIL records under no name (confirmed live) — so a
+    rename is DDL that SYS_QUERY_DETAIL records under no name (confirmed live), so a
     dbt-built relation's only history rows carry the tmp name, and without folding that
     suffix back the final table would have no first-seen row and the too-new guard would
     never protect it.
@@ -189,7 +189,7 @@ def table_hygiene_query() -> str:
     rows outside the sort order), `stats_off` (staleness of the planner's statistics), and
     `skew_rows` (largest-to-smallest slice row ratio). All three can be NULL (no sortable
     data, zero rows, DISTSTYLE ALL); COALESCE reads them as 0, which never trips a threshold.
-    On Serverless, automatic vacuum and analyze usually keep every figure near zero — an
+    On Serverless, automatic vacuum and analyze usually keep every figure near zero, so an
     empty check is the healthy state. Carrying `active_bytes` here lets the verdict apply
     its size floor from these rows alone; SVV_TABLE_INFO omits empty tables, which is
     harmless (an empty table needs no maintenance).

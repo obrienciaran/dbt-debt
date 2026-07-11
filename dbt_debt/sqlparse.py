@@ -3,11 +3,11 @@
 The one fragile primitive both higher layers need is "resolve a column to the real relation and
 column it reads". Two shapes are exposed:
 
-- `columns_read` — every (relation, column) a query *touches* (SELECT, JOIN, WHERE, ...). Drives
-  external column consumption. `SELECT *` is expanded against the schema, which is the
+- `columns_read` returns every (relation, column) a query *touches* (SELECT, JOIN, WHERE, ...).
+  Drives external column consumption. `SELECT *` is expanded against the schema, which is the
   conservative policy: a `*` counts all of a table's columns as used.
-- `column_lineage_edges` — for each of a model's output columns, the upstream base columns that
-  feed it, traced through CTEs and subqueries. Drives column-lineage propagation.
+- `column_lineage_edges` returns, for each of a model's output columns, the upstream base columns
+  that feed it, traced through CTEs and subqueries. Drives column-lineage propagation.
 
 Resolved lineage sidesteps the naive-matching hazards (`SELECT *`, name collisions, multi-hop)
 because dependencies are *resolved*, not string-matched. Anything sqlglot cannot parse raises
@@ -39,7 +39,7 @@ class SqlParseError(RuntimeError):
 def build_schema(relation_columns: RelationColumns) -> Schema:
     """Nest canonical `project.dataset.table` relation keys into a sqlglot schema.
 
-    Keys that are not three-part (the BigQuery shape) are skipped — they cannot be placed
+    Keys that are not three-part (the BigQuery shape) are skipped because they cannot be placed
     unambiguously, and a partial schema still resolves the relations it does know.
     """
 
@@ -93,7 +93,7 @@ def referenced_relations(sql: str, dialect: str = "bigquery") -> set[str]:
 
     A lighter parse than `columns_read`: it needs no schema, only the table references, so it can
     run over model compiled SQL to recover the upstream relations a model depends on. Only
-    three-part keys are kept — CTE references and bare table names are not warehouse relations —
+    three-part keys are kept (CTE references and bare table names are not warehouse relations),
     and the `INFORMATION_SCHEMA` views are skipped. Unparseable SQL raises `SqlParseError`.
     """
 
@@ -115,8 +115,8 @@ def expression_columns(expr: str, dialect: str = "bigquery") -> tuple[str, ...]:
     Used to resolve a semantic model's dimension/measure `expr` (e.g. a CASE over a status
     column) to the columns it depends on. There is no FROM clause to qualify against, so the
     names come back unresolved; the caller pairs them with the semantic model's own model deps.
-    Unparseable input returns `()` — conservative, since the model-grain flag still protects
-    the model itself.
+    Unparseable input returns `()`, which is conservative, since the model-grain flag still
+    protects the model itself.
     """
 
     try:

@@ -1,6 +1,6 @@
 """Exclude dbt's own queries from the usage count.
 
-User consumption is the `SELECT`s a human or BI tool ran — not dbt's builds and tests. dbt tags
+User consumption is the `SELECT`s a human or BI tool ran, not dbt's builds and tests. dbt tags
 every statement with a JSON query-comment, so a regex over `JOBS.query` removes them. This is
 the second line of defence behind the `statement_type = 'SELECT'` filter, which alone would
 keep dbt's data tests (they are `SELECT`s).
@@ -14,7 +14,7 @@ def validate_query_comment_pattern(pattern: str) -> None:
 
     A pattern containing `'''` (or ending in `'`) would terminate BigQuery's raw triple-quoted
     string early, and one containing `$$` would terminate Snowflake's dollar-quoted string, each
-    producing a confusing warehouse syntax error — so we refuse both up front with a message
+    producing a confusing warehouse syntax error, so we refuse both up front with a message
     that names the flag.
     """
 

@@ -1,4 +1,4 @@
-"""The "unused != removable" blocker check — a pure manifest traversal.
+"""The "unused != removable" blocker check, a pure manifest traversal.
 
 A column can be dead-by-usage yet load-bearing: it may back a data test or be bound by an
 enforced model contract. The design rule (see README, "Unused ≠ removable") is:
@@ -41,7 +41,7 @@ def column_blockers(manifest: Manifest, model_unique_id: str, column_name: str) 
     """Compute the blocker analysis for a single column.
 
     A semantic model naming the column blocks it the same way a test does: declared use, not
-    observed use — folding it into the consumed set would silently mark the column active,
+    observed use, and folding it into the consumed set would silently mark the column active,
     whereas "unused but blocked" is the honest verdict.
     """
 

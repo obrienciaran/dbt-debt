@@ -1,10 +1,10 @@
-"""Removable-tests verdict — a pure manifest traversal, no warehouse needed.
+"""Removable-tests verdict. A pure manifest traversal, no warehouse needed.
 
 A test becomes removable once the asset it guards is removed: the model it is attached to is
 dead, or the specific column it guards is dead. This drives the "tests removable" line.
 
 Note the interplay with `blockers`: a test that backs a *column* also makes that column
-*blocked* (not trivially removable). These are consistent — the test is removable only
+*blocked* (not trivially removable). These are consistent, since the test is removable only
 *conditional* on deciding to remove the asset it guards.
 """
 

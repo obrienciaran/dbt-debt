@@ -66,7 +66,7 @@ class AffectedConsumer:
 class DeadModel:
     """A dead buildable node and the storage it would reclaim. `file_path` is the file to remove.
 
-    `resource_type` tags what kind of node died — "model", "seed", or "snapshot" — so the
+    `resource_type` tags what kind of node died ("model", "seed", or "snapshot") so the
     renderers can label non-model entries without a second list. On Snowflake,
     `time_travel_bytes` and `failsafe_bytes` are the retained copies the account still pays
     for on top of `total_bytes` (live data); both are 0 on BigQuery, which has no equivalent.
@@ -88,9 +88,9 @@ class RarelyUsedModel:
 
     `last_queried` is an ISO-8601 string (not a datetime) so the scorecard serializes to JSON
     unchanged; `total_bytes` sizes what a deprecation would reclaim, and `bytes_scanned` is
-    what the few queries read over the window — high scanned bytes on a rarely used model is
+    what the few queries read over the window; high scanned bytes on a rarely used model is
     the "expensive but rarely used" deprecation argument. Never folded into the unused
-    figures — observed use, however small, is still use.
+    figures, because observed use, however small, is still use.
     """
 
     unique_id: str
@@ -159,7 +159,7 @@ class UnpartitionedTable:
     """A large BigQuery table built with neither `partition_by` nor `cluster_by` declared.
 
     `total_bytes` is the *stored* size from the catalog; `bytes_scanned` is what user queries
-    read from it over the window (every one a full scan, since nothing prunes) — the list is
+    read from it over the window (every one a full scan, since nothing prunes); the list is
     ranked by it, so the top entry is the partitioning fix that saves the most. `materialized`
     says whether it is a plain table or an incremental model.
     """
@@ -179,7 +179,7 @@ class UnhealthyTable:
 
     `unsorted_percent` (a big unsorted region means scans stop pruning until VACUUM runs),
     `stats_off_percent` (stale planner statistics; ANALYZE resets it), and `skew_rows` (the
-    largest-to-smallest slice row ratio) carry the figures that tripped the check — the
+    largest-to-smallest slice row ratio) carry the figures that tripped the check; the
     renderer shows only the ones at or above their threshold. `total_bytes` is the stored
     size; `bytes_scanned` is what user queries read from it over the window, and the list is
     ranked by it, so the top entry is the maintenance fix that saves the most.
@@ -224,7 +224,7 @@ class ColumnReport:
     removable: int
     dead_columns: tuple[DeadColumn, ...] = field(default_factory=tuple)
     parsed_queries: int = 0
-    """How many query texts sqlglot parsed — with `unparseable_queries`, the confidence figure."""
+    """How many query texts sqlglot parsed; with `unparseable_queries`, the confidence figure."""
     unparseable_queries: int = 0
     """Query texts sqlglot could not parse; their column reads are invisible to the verdicts.
     Never affects usage verdicts, which do not come from query text."""
@@ -235,8 +235,8 @@ class OrphanedRelation:
     """A table in a dbt-managed dataset with no dbt node, plus any direct-query evidence.
 
     `query_count` / `last_queried` / `bytes_scanned` come from the same usage rows the model
-    verdicts join: a non-zero count means people still query the orphan directly — the
-    dangerous-to-drop ones — while zero means nothing read it all window. `last_queried` is an
+    verdicts join: a non-zero count means people still query the orphan directly (the
+    dangerous-to-drop ones), while zero means nothing read it all window. `last_queried` is an
     ISO-8601 string so the scorecard serializes to JSON unchanged.
     """
 
@@ -254,7 +254,7 @@ class OrphanReport:
     `orphaned_relations` are tables in dbt-managed datasets with no dbt node that no model reads;
     `undeclared_sources` are relations a model reads that have no dbt node (declare them as
     sources). `orphans_checked` is False when the warehouse table metadata could not be listed
-    (missing `bigquery.tables.list`) — undeclared sources are still reported, since they come from
+    (missing `bigquery.tables.list`); undeclared sources are still reported, since they come from
     the manifest, but the orphan list is then empty and not trustworthy.
     """
 
@@ -279,16 +279,16 @@ class Scorecard:
     unaffected_exposures: tuple[str, ...] = ()
     affected_exposures: tuple[AffectedConsumer, ...] = ()
     dead_exposures: tuple[AffectedConsumer, ...] = ()
-    """Exposures whose every model dependency is dead — the consumer itself is likely dead."""
+    """Exposures whose every model dependency is dead, so the consumer itself is likely dead."""
     affected_semantic: tuple[AffectedConsumer, ...] = ()
     dead_models: tuple[DeadModel, ...] = field(default_factory=tuple)
     too_new_models: tuple[DeadModel, ...] = ()
-    """Unqueried but first seen too recently to judge — a third bucket, not counted unused."""
+    """Unqueried but first seen too recently to judge: a third bucket, not counted unused."""
     missing_first_seen: tuple[DeadModel, ...] = ()
     """Snowflake only: unqueried nodes with no first-seen date yet (ACCOUNT_USAGE.TABLES lags,
-    so these are likely new tables) — set aside like the too-new bucket, not counted unused."""
+    so these are likely new tables), set aside like the too-new bucket, not counted unused."""
     rarely_used: tuple[RarelyUsedModel, ...] = ()
-    """Queried at most `rare_threshold` times — a review band, never counted unused."""
+    """Queried at most `rare_threshold` times: a review band, never counted unused."""
     rare_threshold: int = 0
     reclaimable_bytes: int = 0
     coverage: Coverage | None = None
@@ -297,7 +297,7 @@ class Scorecard:
     """BigQuery only: large tables declaring neither partition_by nor cluster_by."""
     unhealthy_tables: tuple[UnhealthyTable, ...] = ()
     """Redshift only: large tables with a big unsorted region, stale statistics, or heavy
-    slice skew. Usually empty where automatic vacuum and analyze keep up — the healthy state."""
+    slice skew. Usually empty where automatic vacuum and analyze keep up (the healthy state)."""
     unused_sources: tuple[UnusedSource, ...] = ()
     """Declared sources nothing in the project reads; a review list, never counted unused."""
     stale_sources: tuple[StaleSource, ...] = ()
@@ -357,7 +357,7 @@ def build_scorecard(
 
     `first_seen` (relation_key -> earliest job) drives the too-new guard: an unqueried node
     younger than `config.min_age_days` is set aside as "too new to judge" and excluded from
-    every unused-derived figure — the count, the removable tests, the exposure and semantic
+    every unused-derived figure: the count, the removable tests, the exposure and semantic
     impact, and the reclaimable bytes. On Snowflake an unqueried node with no first-seen date
     at all is set aside the same way (as "missing a first-seen date, likely a new table"), since
     ACCOUNT_USAGE.TABLES lags behind reality. Queried nodes with at most `config.rare_threshold`
@@ -377,8 +377,8 @@ def build_scorecard(
 
     # On Snowflake, first-seen comes from ACCOUNT_USAGE.TABLES, which lags (~90 minutes): a
     # dead node with no row yet cannot prove its age, so it is set aside as a likely new table
-    # rather than judged. On BigQuery a missing first-seen means zero jobs all window — the
-    # strongest unused signal — so those are judged normally.
+    # rather than judged. On BigQuery a missing first-seen means zero jobs all window (the
+    # strongest unused signal), so those are judged normally.
     missing: set[str] = set()
     if config.warehouse == "snowflake" and min_age > timedelta(0):
         missing = missing_first_seen_models(unqueried, first_seen_ids)
@@ -392,7 +392,7 @@ def build_scorecard(
     if config.warehouse == "snowflake" and min_age > timedelta(0):
         rare -= missing_first_seen_models(rare, first_seen_ids)
 
-    # When the column stage ran, tests guarding a dead column are removable too — rebuild the
+    # When the column stage ran, tests guarding a dead column are removable too: rebuild the
     # (model, column) refs the tests verdict compares against from the ranked dead list.
     dead_column_refs: set[ColumnRef] = (
         {(c.unique_id, c.column) for c in column_report.dead_columns}
@@ -401,7 +401,7 @@ def build_scorecard(
     )
 
     # Storage reclaimed by dropping the whole dead tables. Only whole dead models have a real
-    # figure — BigQuery reports no per-column size, so dead columns are not summed here.
+    # figure: BigQuery reports no per-column size, so dead columns are not summed here.
     reclaimable = sum(_model_bytes(manifest, storage_bytes, uid) for uid in dead)
 
     def rarely_used_entry(uid: str) -> RarelyUsedModel:
@@ -419,7 +419,7 @@ def build_scorecard(
         )
 
     def ranked_rarely_used(uids: Set[str]) -> tuple[RarelyUsedModel, ...]:
-        # Most scanned bytes first — the "expensive but rarely used" candidates on top — then
+        # Most scanned bytes first (the "expensive but rarely used" candidates on top), then
         # stored size, so the ranking still works when the warehouse reports no byte figures.
         ranked = sorted(
             uids,
@@ -508,7 +508,7 @@ def build_scorecard(
 
     # The hygiene check is Redshift-specific: BigQuery and Snowflake maintain storage layout
     # automatically and expose no maintenance columns. The sizes on the entries come from the
-    # hygiene rows themselves — warehouse truth, present even without a catalog.
+    # hygiene rows themselves: warehouse truth, present even without a catalog.
     hygiene_by_key = dict(table_hygiene or {})
     unhealthy: tuple[UnhealthyTable, ...] = ()
     if config.warehouse == "redshift":
@@ -604,7 +604,7 @@ def build_column_report(
 ) -> ColumnReport:
     """Assemble the column-grain section: dead vs active, removable, and the full ranked dead list.
 
-    `removable` softens "dead" with the manifest blocker check — a dead column backing a test or
+    `removable` softens "dead" with the manifest blocker check: a dead column backing a test or
     bound by an enforced contract is *not* trivially removable. Dead columns are ranked by their
     owning model's storage, the best available proxy (BigQuery has no per-column bytes). The whole
     ranked list is kept; the renderer decides how much to show. `consumption` carries the parse
@@ -657,7 +657,7 @@ def build_orphan_report(
     `bigquery.tables.list`); then `orphans_checked` is False and the orphan list is empty, but
     undeclared sources are still reported because they are recovered from the manifest.
     `usage_rows` (already fetched for the model verdicts) attach direct-query evidence to each
-    orphan and rank the still-queried ones first — those are dangerous to drop.
+    orphan and rank the still-queried ones first; those are dangerous to drop.
     """
 
     dbt_keys = manifest.dbt_relation_keys()

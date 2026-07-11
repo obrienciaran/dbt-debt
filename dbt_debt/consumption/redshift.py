@@ -2,14 +2,14 @@
 
 It composes the pure SQL builders in `redshift_queries` with a live connection and reuses the
 warehouse-neutral row parsers in `jobs`. Imports are lazy so the rest of the package (and the
-test suite, via the fake) loads without the Redshift dependency or any credentials — the
+test suite, via the fake) loads without the Redshift dependency or any credentials. The
 connector is an optional extra (`pip install 'dbt-debt[redshift]'`).
 
 Connection details come from environment variables (`REDSHIFT_HOST`, `REDSHIFT_USER`,
 `REDSHIFT_PASSWORD`, optional `REDSHIFT_DATABASE` and `REDSHIFT_PORT`): redshift-connector has
 no named-connection file like Snowflake's connections.toml, and env vars keep credentials out
 of both the repository and the shell history. Core loop validated against a live Serverless
-workgroup — see DESIGN.md's Redshift section for what is confirmed and what remains open.
+workgroup. See DESIGN.md's Redshift section for what is confirmed and what remains open.
 """
 
 from __future__ import annotations
@@ -196,7 +196,7 @@ def _as_utc(value: Any) -> Any:
     """Stamp UTC on naive datetimes; everything else passes through.
 
     The SYS views report timestamps in UTC but as `timestamp without time zone`, so the
-    driver hands back naive datetimes (confirmed live) — unlike BigQuery and Snowflake, whose
+    driver hands back naive datetimes (confirmed live), unlike BigQuery and Snowflake, whose
     values arrive timezone-aware. The verdicts compare against aware `now` values, so the
     zone is restored here, at the one boundary that knows it was dropped.
     """

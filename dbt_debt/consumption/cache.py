@@ -5,17 +5,17 @@ composes with any real client and is exercised by the same `FakeWarehouseClient`
 memoizes the slow warehouse round-trips (`table_usage`, `query_texts`, `relation_first_seen`,
 `existing_relations`, `table_storage`, `table_hygiene`, `source_last_modified`) to JSON files
 keyed by the query
-parameters — never the manifest, which warehouse results don't depend on. The permission
+parameters, never the manifest, which warehouse results don't depend on. The permission
 preflight is delegated, never cached, because permissions can change and the check is
 load-bearing.
 
 Entries carry their creation time *and the TTL they were written under*: an expired read is a
 miss (and the file is removed), and every cache directory is pruned of expired files on
 construction. Storing the TTL per entry is what makes `--cache-ttl 2` outlive the session that
-passed it — a later flag-less run honors each entry's own lifetime rather than re-judging it
+passed it, so a later flag-less run honors each entry's own lifetime rather than re-judging it
 against the default. An explicit `--cache-ttl` on the current run overrides the stored values
 (`honor_entry_ttl=False`), in both directions. The TTL prune is the guaranteed, cross-platform
-teardown — important because Windows does not clear its temp directory on reboot the way Unix
+teardown, important because Windows does not clear its temp directory on reboot the way Unix
 clears `/tmp`. The cache therefore cannot persist forever.
 """
 
@@ -261,7 +261,7 @@ class CachingWarehouseClient:
     def _load_entry(path: Path) -> tuple[datetime, timedelta | None, object] | None:
         """Parse a cache file into (created, own ttl, data), or None when missing or corrupt.
 
-        Any malformed file — unreadable, not JSON, not a dict, missing or mistyped fields —
+        Any malformed file (unreadable, not JSON, not a dict, missing or mistyped fields)
         reads as None so a damaged cache degrades to a miss instead of crashing the scan. The
         ttl is None for entries written before it was stored per entry.
         """
@@ -303,7 +303,7 @@ class CachingWarehouseClient:
         path.write_text(json.dumps(entry))
 
     def _prune(self) -> None:
-        """Delete every expired or corrupt entry in the cache directory — the teardown that bounds growth."""
+        """Delete every expired or corrupt entry in the cache directory, bounding cache growth."""
 
         now = datetime.now(timezone.utc)
         for path in self._dir.glob("*.json"):

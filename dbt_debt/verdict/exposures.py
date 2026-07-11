@@ -1,9 +1,9 @@
-"""Exposure-impact verdict — a pure manifest traversal, no warehouse needed.
+"""Exposure-impact verdict. A pure manifest traversal, no warehouse needed.
 
 Exposures depend on models, not columns, so impact is computed at model grain. An exposure
 is *unaffected* when every upstream model is still active, *affected* when some but not all
 upstream models are dead (review before removing), and *dead* when every model it depends on
-is dead — nothing queried anything the dashboard reads, so the dashboard itself is likely
+is dead, meaning nothing queried anything the dashboard reads, so the dashboard itself is likely
 dead. The three sets are mutually exclusive. Non-model dependencies (e.g. sources) are
 ignored for the all-dead rule, and because the dead set already excludes too-new and
 rarely-used nodes, an exposure over those is never flagged.
@@ -38,7 +38,7 @@ def affected_exposures(manifest: Manifest, dead_models: Set[str]) -> list[Exposu
 
 
 def dead_exposures(manifest: Manifest, dead_models: Set[str]) -> list[Exposure]:
-    """Exposures whose every model dependency is dead — the consumer itself is likely dead."""
+    """Exposures whose every model dependency is dead, so the consumer itself is likely dead."""
 
     return [
         exposure

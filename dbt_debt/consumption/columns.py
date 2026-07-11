@@ -5,7 +5,7 @@ BI tool actually read is to parse the query SQL. Each query's resolved (relation
 are mapped to the owning model; columns that resolve to non-model relations (raw sources) are
 dropped. Unparseable queries are skipped so one bad query never sinks the scan, but they are
 counted, so the report can say how much of the query text the column verdicts actually saw.
-Usage verdicts never depend on this parsing — only column-level findings do.
+Usage verdicts never depend on this parsing; only column-level findings do.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ class ColumnConsumption:
 
     `parsed` + `unparseable` is the number of query texts inspected; a high unparseable share
     means the column verdicts saw less evidence than the usage verdicts did. `unparseable`
-    covers every query no reads could be extracted from — broken SQL and SQL that would not
+    covers every query no reads could be extracted from, both broken SQL and SQL that would not
     qualify against the catalog schema alike.
     """
 

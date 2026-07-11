@@ -1,4 +1,4 @@
-"""Semantic-layer impact verdict — a pure manifest traversal, no warehouse needed.
+"""Semantic-layer impact verdict. A pure manifest traversal, no warehouse needed.
 
 The exposure check's semantic-layer sibling, with one extra hop: metrics depend on semantic
 models (and sometimes other metrics), and saved queries depend on metrics, so impact has to
@@ -36,7 +36,7 @@ class AffectedSemanticConsumer:
 def affected_semantic_consumers(
     manifest: Manifest, dead_models: Set[str]
 ) -> list[AffectedSemanticConsumer]:
-    """Semantic consumers fed — directly or transitively — by at least one dead model.
+    """Semantic consumers fed, directly or transitively, by at least one dead model.
 
     Resolved by fixpoint over the consumer dependency graph so a saved query over a metric
     over a semantic model over a dead model is flagged too; cycles between consumers simply

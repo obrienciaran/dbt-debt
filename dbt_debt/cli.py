@@ -88,7 +88,7 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
     if config.stale_source_days > 0 and manifest.relations:
         if config.warehouse == "redshift":
             # Redshift exposes no last-data-received metadata (no `last_altered` or
-            # `__TABLES__` analogue), so staleness cannot be read, only guessed — which the
+            # `__TABLES__` analogue), so staleness cannot be read, only guessed, which the
             # check never does.
             print(
                 "Redshift exposes no table last-modified metadata; the stale-source check is "
@@ -120,8 +120,8 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
 def _load_catalog(config: Config) -> Catalog | None:
     """Load catalog.json when present and readable; None (with a warning) otherwise.
 
-    A malformed catalog degrades exactly like a missing one — sizes go blank and the column
-    stage is skipped — because the scan's core verdicts never depend on it.
+    A malformed catalog degrades exactly like a missing one (sizes go blank and the column
+    stage is skipped) because the scan's core verdicts never depend on it.
     """
 
     if not config.catalog_path.exists():
@@ -137,9 +137,9 @@ def _storage_bytes(catalog: Catalog | None) -> dict[str, int]:
     """Per-relation logical bytes from catalog.json, for ranking the reclaimable dead assets.
 
     dbt's adapter records each relation's `num_bytes` during `dbt docs generate`, so sizes come
-    from the catalog already on disk rather than a live `INFORMATION_SCHEMA.TABLE_STORAGE` query
-    — which needs a stronger grant (`bigquery.tables.list`) that some projects cannot read even
-    as Owner. Without a catalog the map is empty and dead assets rank by name.
+    from the catalog already on disk rather than a live `INFORMATION_SCHEMA.TABLE_STORAGE`
+    query, which needs a stronger grant (`bigquery.tables.list`) that some projects cannot read
+    even as Owner. Without a catalog the map is empty and dead assets rank by name.
     """
 
     if catalog is None:
@@ -150,7 +150,7 @@ def _storage_bytes(catalog: Catalog | None) -> dict[str, int]:
 def _infer_database(manifest: Manifest) -> str | None:
     """The warehouse database the models live in, taken as the most common model `database`.
 
-    On BigQuery this is the GCP project — `INFORMATION_SCHEMA.JOBS` is project-scoped, so the
+    On BigQuery this is the GCP project: `INFORMATION_SCHEMA.JOBS` is project-scoped, so the
     scan must run where the relations (and their queries) live. On Snowflake it names the
     database whose `INFORMATION_SCHEMA.TABLES` the orphan scan reads. Either way this lets the
     tool target the right database without a flag, the way dbt itself does.
@@ -185,8 +185,8 @@ def _resolve_warehouse(flag: str | None, manifest: Manifest) -> str:
 def _make_client(config: Config, database: str | None) -> WarehouseClient:
     """Build the live client for the resolved warehouse.
 
-    Each adapter module lazily imports its own SDK, so scanning one warehouse never imports —
-    or requires installing — the other's client library.
+    Each adapter module lazily imports its own SDK, so scanning one warehouse never imports
+    (or requires installing) the other's client library.
     """
 
     if config.warehouse == "snowflake":
@@ -238,7 +238,7 @@ def _existing_relations(
 ) -> list[WarehouseRelation] | None:
     """List warehouse relations in dbt-managed datasets, or None when they can't be read.
 
-    Returns None — orphaned-relation discovery is skipped — when there are no managed datasets,
+    Returns None (orphaned-relation discovery is skipped) when there are no managed datasets,
     when the caller lacks `bigquery.tables.list`, or when the metadata comes back without any of
     the model relations that must physically exist (a sign the listing was silently empty rather
     than truly empty). A warning is printed in the readable cases; undeclared sources are reported
@@ -272,7 +272,7 @@ def _source_last_modified(
 ) -> dict[str, datetime] | None:
     """Last-modified metadata for the source datasets, or None when it can't be read.
 
-    Returns None — the stale-source check is skipped — when the caller lacks read access to
+    Returns None (the stale-source check is skipped) when the caller lacks read access to
     the source datasets, with a warning; the rest of the scan is unaffected. Mirrors the
     orphan path's `_existing_relations` degradation.
     """
@@ -400,7 +400,7 @@ def _run_scan(args: argparse.Namespace) -> int:
 
 
 def _clear_project_cache(project_dir: Path) -> None:
-    """Delete one project's cached results — the first step of `scan --clear-cache` before it scans."""
+    """Delete one project's cached results: the first step of `scan --clear-cache` before it scans."""
 
     import shutil
 
@@ -411,7 +411,7 @@ def _clear_project_cache(project_dir: Path) -> None:
 
 
 def _clear_all_cache() -> None:
-    """Delete every project's cached results — the top-level `dbt-debt --clear-cache`."""
+    """Delete every project's cached results: the top-level `dbt-debt --clear-cache`."""
 
     import shutil
 
@@ -445,7 +445,7 @@ def _wrap_cache(client: WarehouseClient, config: Config, project: str | None) ->
     key_parts = {
         "warehouse": config.warehouse,
         "connection": config.connection or "",
-        # Redshift's connection is env-var based, so the endpoint joins the key here — two
+        # Redshift's connection is env-var based, so the endpoint joins the key here: two
         # workgroups sharing a database name must never serve each other's cached rows.
         "endpoint": os.environ.get("REDSHIFT_HOST", "") if config.warehouse == "redshift" else "",
         "project": project or "",
@@ -466,7 +466,7 @@ def _should_view(config: Config, args: argparse.Namespace) -> bool:
     """Open the interactive viewer only with no competing output intent, in a drivable terminal.
 
     Any explicit output flag (`--print`, `--format json`, `-o`, `--orphans`) means the caller
-    wants plain output — for a pipe, a file, or a script — so the viewer stays out of the way.
+    wants plain output (for a pipe, a file, or a script), so the viewer stays out of the way.
     Otherwise a human at a real terminal gets the tabbed report by default.
     """
 

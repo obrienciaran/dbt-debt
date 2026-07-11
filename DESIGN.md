@@ -212,8 +212,11 @@ The adapter is built from AWS's published schemas, pinned by tests, and its core
 validated live against a Serverless workgroup via `demo_redshift/` (the same medallion
 project): the preflight as the namespace admin, per-relation usage counts matching planted
 queries, dbt-build exclusion, the orphan with direct-query evidence and scanned bytes, the
-too-new guard on dbt-built relations, the result-cache join, and SVV_TABLE_INFO sizes on the
-scorecard, exit 0 end to end.
+too-new guard on dbt-built relations, the result-cache join, SVV_TABLE_INFO sizes on the
+scorecard, the stale-source skip note (fired once the demo declared its `raw.raw_events`
+source, which itself lands under unused declared sources with its one direct query and
+scanned bytes), and the table-hygiene check (ran and returned empty, rendering nothing —
+the healthy state on Serverless), exit 0 end to end.
 
 The design decisions, and what the live scans showed:
 
@@ -257,8 +260,10 @@ The design decisions, and what the live scans showed:
   from the query history, never `SVV_TABLE_INFO.create_time`, which resets on every rebuild.
   A dead node with no first-seen row means no jobs within retention and is judged normally,
   like BigQuery; the missing-first-seen set-aside stays Snowflake-only (lagging metadata is
-  Snowflake's failure mode, not Redshift's). *To measure live:* actual SYS retention
-  (`MIN(start_time)` on a seasoned account; the demo account is too young to show a floor).
+  Snowflake's failure mode, not Redshift's). *Measured 2026-07-11:* `MIN(start_time)` on
+  `SYS_QUERY_HISTORY` still reaches the demo account's first activity (2026-07-10), so the
+  account is too young to show a retention floor; re-measure once it is comfortably older
+  than the candidate windows (from mid-August 2026).
 - **The dbt exclusion reuses the Snowflake form** (`REGEXP_COUNT(query_text, $$...$$) = 0`);
   Redshift supports both the function and dollar-quoted literals. `query_text` is truncated at
   4000 characters, which is harmless: dbt's query-comment leads the statement, and the
@@ -282,6 +287,8 @@ The design decisions, and what the live scans showed:
   window — if that window is shorter than `--stale-source-days`, any table with a row was
   loaded within retention and can never look stale, so the check could never fire. Revisit
   only if the retention measurement shows a window comfortably longer than the threshold.
+  *Confirmed live:* with a declared source in the manifest, the scan prints the skip note on
+  stderr, reports `stale_checked` false, and completes with exit 0.
 - **Connection comes from `REDSHIFT_*` environment variables** (`HOST`, `USER`, `PASSWORD`,
   optional `DATABASE` and `PORT`). redshift-connector has no named-connection file like
   connections.toml, and env vars keep credentials off disk; the database defaults to the one
@@ -303,7 +310,10 @@ The design decisions, and what the live scans showed:
   sort/distribution-key declarations like the partitioning check ranks `partition_by` —
   stays rejected: Redshift assigns both automatically, so a bare declaration is not debt;
   only measured neglect is. Review-only, one extra system-view read, and it never feeds any
-  unused figure.
+  unused figure. *Confirmed live:* on the Serverless demo the check runs and returns empty
+  (`unhealthy_tables: []` in the JSON, no section in the text), exactly the healthy state
+  auto vacuum/analyze is expected to produce; a flagged specimen has not been observed live,
+  since planting one is timing-dependent at best.
 
 ## The rarely-used band and the hygiene checks
 

@@ -185,3 +185,8 @@ overrides). Snowflake and Redshift need their optional extras, `pip install
 
 For the cache, how it works, permissions and sign-in (BigQuery, Snowflake, and Redshift), full
 options, and how to work on dbt-debt, see [`USAGE.md`](USAGE.md).
+
+## 🔧 Note
+
+- Built using Claude Fable 5 and 10 years of experience as a data professional in medium to large enterprises.
+- Security audited using Cloudflare's [`security audit skill`](https://github.com/cloudflare/security-audit-skill).

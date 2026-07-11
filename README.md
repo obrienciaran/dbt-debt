@@ -72,7 +72,7 @@ that history".
 - **rarely used models.** Queried, but at most 5 times in the whole window (`--rare-threshold`;
   `0` turns the band off). These still count as used and never feed the removable or reclaimable
   figures. Each is listed with its query count, last-queried date, size, and the bytes those few
-  queries scanned, most scanned first. A big scanned figure on a tiny query count means expensive
+  queries scanned, most scanned first. A big bytes scanned on a tiny query count means expensive
   and barely used, the strongest case for deprecating.
 - **too new to judge.** A model first seen in the query log fewer than 7 days ago
   (`--min-age-days`) hasn't had a fair chance to be queried, so it's listed separately instead of
@@ -94,9 +94,8 @@ that history".
 - **exposures affected.** An **exposure** is a downstream consumer (a dashboard, a report) your
   team has written into the dbt project. An unused model feeding one is flagged "affected" so you
   check before removing it. Exposures whose models are all active aren't listed.
-- **exposures that are likely dead.** When *every* model an exposure reads is unused, nothing the
-  dashboard shows was queried all window, so the dashboard itself is probably dead. Listed by
-  name, separately from the merely affected, as candidates to retire.
+- **exposures that are likely dead.** When *every* model an exposure reads is unused, the dashboard
+  itself is probably dead. Listed by name, separately from the merely affected, as candidates to retire.
 - **semantic-layer consumers affected.** An unused model feeding a semantic model, metric, or
   saved query (even through a chain of metrics) is flagged for review the same way, and a column
   a semantic model names is never counted as removable. Each consumer is listed with what makes
@@ -133,14 +132,14 @@ that history".
   model of 1 GB or more built with neither `partition_by` nor `cluster_by` gets a full scan from
   every query that touches it. The offenders (up to 20) are listed with stored size and the
   bytes user queries scanned over the window, most scanned first, so the top entry is the
-  partitioning fix that saves the most. BigQuery only: Snowflake micro-partitions
+  partitioning fix that saves the most. BigQuery only as Snowflake micro-partitions
   automatically, and Redshift manages sort and distribution itself.
 - **large tables needing maintenance (Redshift only).** A table of 1 GB or more whose
   `SVV_TABLE_INFO` row shows a big unsorted region (20%+, needs VACUUM), stale planner
   statistics (`stats_off` 10+, needs ANALYZE), or heavy slice skew (4x+, needs a
   distribution-key review). Listed with stored size and the bytes user queries scanned, most
   scanned first. Automatic vacuum and analyze usually keep this list empty, and an empty list is
-  the healthy state, and BigQuery and Snowflake maintain storage layout themselves.
+  the healthy state. BigQuery and Snowflake maintain storage layout themselves.
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage
   you'd reclaim; on Snowflake and Redshift the sizes come live from the warehouse (no
   `dbt docs generate` needed), and Snowflake's include the time-travel and fail-safe copies

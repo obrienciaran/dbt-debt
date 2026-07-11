@@ -1,13 +1,16 @@
 # 🧹 dbt-debt
 
-dbt-debt finds the dead weight in a dbt project on BigQuery, Snowflake, or Redshift: which
-models and columns nobody uses anymore, which are barely used, which are safe to remove, and
-which tables exist in your warehouse with no dbt model behind them. (For the Snowflake and
-Redshift install extras, connection setup, and permissions, see [`USAGE.md`](USAGE.md).)
+### dbt-debt finds the dead weight in a dbt project on BigQuery, Snowflake, or Redshift.
 
-It works by comparing your dbt project against two things the warehouse already knows: a log of
-every query that has run, and a list of the tables that actually exist. There's no account to
-make and nothing to log into. If `dbt run` works on your machine, `dbt-debt scan` works too,
+Which models and columns nobody uses anymore, which are barely used, which are safe to remove, and
+which tables exist in your warehouse with no dbt model behind them.
+
+It works by comparing your dbt project against two things the warehouse already knows:
+
+1. a log of every query that has run
+2. a list of the tables that actually exist
+
+There's no account to make and nothing to log into. If `dbt run` works on your machine, `dbt-debt scan` works too,
 provided you have the right warehouse permissions.
 
 👉 dbt-debt only reports. It never edits or deletes anything.
@@ -153,6 +156,8 @@ git clone <this repo>
 cd dbt-debt
 pip install .
 ```
+
+(For the Snowflake and Redshift install extras, connection setup, and permissions, see [`USAGE.md`](USAGE.md).)
 
 ## 🚀 Using it
 

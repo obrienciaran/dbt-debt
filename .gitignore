@@ -21,6 +21,8 @@ logs/
 .claude/
 CLAUDE.md
 next_steps.md
+.agents/
+skills-lock.json
 
 # Python
 __pycache__/

@@ -11,7 +11,7 @@ from dbt_debt.artifacts.graph import Graph
 from dbt_debt.artifacts.manifest import load_manifest
 from dbt_debt.cli import _emit, _infer_database, _scan
 from dbt_debt.config import Config
-from dbt_debt.domain import TableStorage, UsageRow
+from dbt_debt.domain import TableHygiene, TableStorage, UsageRow
 from dbt_debt.report.scorecard import ColumnReport, DeadColumn, build_scorecard
 from tests.fakes import FakeWarehouseClient
 
@@ -353,6 +353,59 @@ def test_partitioning_check_ranks_by_scanned_bytes_from_the_usage_rows() -> None
     assert card.unpartitioned_tables[0].bytes_scanned == 80 * 1024**3
 
 
+def _hygiene_row(
+    unsorted: float = 0, stats_off: float = 0, skew: float = 0, active_bytes: int = 5 * 1024**3
+) -> TableHygiene:
+    return TableHygiene(
+        unsorted_percent=unsorted,
+        stats_off_percent=stats_off,
+        skew_rows=skew,
+        total_rows=1000,
+        active_bytes=active_bytes,
+    )
+
+
+def test_hygiene_check_is_redshift_only() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    hygiene = {FCT_KEY: _hygiene_row(unsorted=50)}
+
+    redshift = Config(
+        project_dir=FIXTURE.parent.parent, target_path=FIXTURE.parent.name, warehouse="redshift"
+    )
+    card = build_scorecard(manifest, graph, [], {}, redshift, table_hygiene=hygiene)
+    assert [t.name for t in card.unhealthy_tables] == ["fct_orders"]
+    entry = card.unhealthy_tables[0]
+    # The size on the entry comes from the hygiene row itself, not the catalog map.
+    assert entry.total_bytes == 5 * 1024**3
+    assert (entry.unsorted_percent, entry.stats_off_percent, entry.skew_rows) == (50, 0, 0)
+    assert entry.bytes_scanned == 0
+
+    # The same hygiene map on any other warehouse produces nothing.
+    assert build_scorecard(manifest, graph, [], {}, _config(), table_hygiene=hygiene) == (
+        build_scorecard(manifest, graph, [], {}, _config())
+    )
+
+
+def test_hygiene_check_ranks_by_scanned_bytes_from_the_usage_rows() -> None:
+    # stg stores less than fct but user queries scanned it far more, so it tops the list —
+    # its maintenance saves the most. The bytes carried on each entry come from the same rows.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    hygiene = {
+        FCT_KEY: _hygiene_row(unsorted=50, active_bytes=5 * 1024**3),
+        STG_KEY: _hygiene_row(stats_off=90, active_bytes=2 * 1024**3),
+    }
+    usage = [UsageRow(relation_key=STG_KEY, query_count=40, bytes_scanned=80 * 1024**3)]
+    redshift = Config(
+        project_dir=FIXTURE.parent.parent, target_path=FIXTURE.parent.name, warehouse="redshift"
+    )
+
+    card = build_scorecard(manifest, graph, usage, {}, redshift, table_hygiene=hygiene)
+    assert [t.name for t in card.unhealthy_tables] == ["stg_orders", "fct_orders"]
+    assert card.unhealthy_tables[0].bytes_scanned == 80 * 1024**3
+
+
 def test_infer_database_from_model_database() -> None:
     manifest = load_manifest(FIXTURE)
     # Fixture models live in database "my-gcp-project"; that is the project to query.
@@ -538,6 +591,26 @@ def test_scan_on_redshift_prefers_live_storage_metrics_over_catalog_sizes() -> N
     dead = {m.relation_key: m for m in card.dead_models}
     assert dead[FCT_KEY].total_bytes == 4096
     assert (dead[FCT_KEY].time_travel_bytes, dead[FCT_KEY].failsafe_bytes) == (0, 0)
+
+
+def test_scan_on_redshift_reads_table_hygiene() -> None:
+    config = Config(
+        project_dir=FIXTURE.parent.parent,
+        target_path=Path(FIXTURE.parent.name),
+        warehouse="redshift",
+        min_age_days=0,
+    )
+    client = FakeWarehouseClient(table_hygiene={FCT_KEY: _hygiene_row(unsorted=50)})
+    card = _scan(config, client)
+    assert client.calls["table_hygiene"] == 1
+    assert [t.name for t in card.unhealthy_tables] == ["fct_orders"]
+
+
+def test_scan_off_redshift_never_asks_for_table_hygiene() -> None:
+    client = FakeWarehouseClient(table_hygiene={FCT_KEY: _hygiene_row(unsorted=50)})
+    card = _scan(_config(), client)
+    assert client.calls["table_hygiene"] == 0
+    assert card.unhealthy_tables == ()
 
 
 def test_scan_on_redshift_skips_the_stale_source_check_with_a_note(

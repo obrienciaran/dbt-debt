@@ -260,3 +260,22 @@ def test_cache_key_carries_the_warehouse(tmp_path: Path) -> None:
     wrapped: Any = _wrap_cache(FakeWarehouseClient(), config, "db")
     assert wrapped._key_parts["warehouse"] == "snowflake"
     assert wrapped._key_parts["connection"] == "team"
+
+
+def test_cache_key_carries_the_redshift_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Redshift's connection is env-var based, so the endpoint joins the key: two workgroups
+    # sharing a database name must never serve each other's cached rows. Off Redshift the
+    # env var is ignored.
+    from dbt_debt.cli import _wrap_cache
+    from dbt_debt.config import Config
+    from tests.fakes import FakeWarehouseClient
+
+    monkeypatch.setenv("REDSHIFT_HOST", "wg-a.eu-west-1.redshift-serverless.amazonaws.com")
+    config = Config(project_dir=tmp_path, warehouse="redshift")
+    wrapped: Any = _wrap_cache(FakeWarehouseClient(), config, "db")
+    assert wrapped._key_parts["endpoint"] == "wg-a.eu-west-1.redshift-serverless.amazonaws.com"
+
+    bigquery: Any = _wrap_cache(FakeWarehouseClient(), Config(project_dir=tmp_path), "db")
+    assert bigquery._key_parts["endpoint"] == ""

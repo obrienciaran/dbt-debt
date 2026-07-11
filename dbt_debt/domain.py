@@ -125,6 +125,24 @@ class TableStorage:
 
 
 @dataclass(frozen=True)
+class TableHygiene:
+    """One table's Redshift maintenance state, from `SVV_TABLE_INFO`.
+
+    `unsorted_percent` is the share of rows outside the sort order (a large region means scans
+    stop pruning until VACUUM runs); `stats_off_percent` is how stale the planner's statistics
+    are (ANALYZE resets it); `skew_rows` is the largest-to-smallest slice row ratio (heavy skew
+    makes one slice the bottleneck). NULLs are read as 0 at parse time, so a value of 0 never
+    flags. Redshift only; a review signal, never an input to any usage verdict.
+    """
+
+    unsorted_percent: float
+    stats_off_percent: float
+    skew_rows: float
+    total_rows: int
+    active_bytes: int
+
+
+@dataclass(frozen=True)
 class ColumnEdge:
     """A column-lineage edge: `upstream` feeds `downstream` (data flows upstream → downstream).
 

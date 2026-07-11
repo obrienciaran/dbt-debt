@@ -21,7 +21,7 @@ from dbt_debt.consumption.cache import (
     _usage_to_json,
     cache_dir_for,
 )
-from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
+from dbt_debt.domain import TableHygiene, TableStorage, UsageRow, WarehouseRelation
 from tests.fakes import FakeWarehouseClient
 
 _KEY = {"project": "p", "region": "US", "lookback_days": "180", "query_comment_pattern": "x"}
@@ -279,6 +279,29 @@ def test_table_storage_round_trips_through_the_cache(tmp_path: Path) -> None:
     second = client.table_storage()
 
     assert first == second == storage
+    assert inner.calls["table_storage"] == 1
+
+
+def test_table_hygiene_round_trips_through_the_cache(tmp_path: Path) -> None:
+    hygiene = {
+        "a.b.c": TableHygiene(
+            unsorted_percent=42.5,
+            stats_off_percent=10.0,
+            skew_rows=4.2,
+            total_rows=100,
+            active_bytes=1024,
+        )
+    }
+    inner = FakeWarehouseClient(table_hygiene=hygiene)
+    client = _client(inner, tmp_path)
+
+    first = client.table_hygiene()
+    second = client.table_hygiene()
+
+    assert first == second == hygiene
+    assert inner.calls["table_hygiene"] == 1
+    # Keyed per method, so the storage call still goes to the inner client.
+    client.table_storage()
     assert inner.calls["table_storage"] == 1
 
 

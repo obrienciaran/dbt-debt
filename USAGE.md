@@ -26,7 +26,9 @@ put together, see [`DESIGN.md`](DESIGN.md).
 7. Add the hygiene extras from the dbt files alone (no warehouse access needed): test and docs
    coverage, documentation drift (YAML columns that no longer exist in the built table),
    likely-dead exposures, and, on BigQuery, tables of 1 GB or more with neither `partition_by`
-   nor `cluster_by`. The thresholds are explained in the README.
+   nor `cluster_by`. On Redshift one hygiene check does read the warehouse (a single
+   `SVV_TABLE_INFO` select): large tables whose VACUUM/ANALYZE maintenance has fallen behind.
+   The thresholds are explained in the README.
 
 ### 🔍 Orphans and sources, explained
 
@@ -241,6 +243,14 @@ breakdown, and it exposes no table last-modified metadata, so the stale-source c
 skipped with a note. One retention caveat: the SYS views keep a bounded history (AWS leaves
 the exact figure unstated; the older STL views keep seven days), which caps both the
 effective lookback window and how far back a first-seen date can reach.
+
+The same `SVV_TABLE_INFO` read feeds a Redshift-only table-hygiene check: a table of 1 GB or
+more is flagged when its unsorted region reaches 20% (needs VACUUM), its `stats_off` reaches
+10 (stale planner statistics; needs ANALYZE), or its slice-skew ratio reaches 4 (worth a
+distribution-key review), listed most-scanned-bytes first so the top entry is the fix that
+saves the most. Automatic vacuum and analyze — always on for Serverless and the default on
+provisioned clusters — usually keep every figure near zero, so the section simply not
+appearing is the healthy state.
 
 ## ⚙️ Options
 

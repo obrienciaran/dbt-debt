@@ -64,6 +64,7 @@ dbt_debt/
     rarity.py            # the rarely-used band (queried, but at most --rare-threshold times)
     coverage.py          # test and docs coverage counts
     partitioning.py      # large BigQuery tables declaring neither partition_by nor cluster_by
+    redshift_hygiene.py  # large Redshift tables whose VACUUM/ANALYZE maintenance fell behind
     semantic.py          # which semantic models / metrics / saved queries a dead model feeds
     tests.py / exposures.py / blockers.py   # checks that only need dbt's own files
 
@@ -84,6 +85,7 @@ settings ─┐
           │     • the query text (only when checking columns)
           │     • the list of tables in the dbt-managed datasets (only when finding orphans)
           │     • each table's live storage bytes (Snowflake and Redshift; on BigQuery sizes come from catalog.json)
+          │     • each table's maintenance state (Redshift only, for the table-hygiene check)
           │     • when each source table last received data (only for the stale-source check)
           ├─> lineage (column check): which column feeds which
           ├─> references: which tables each model reads
@@ -275,12 +277,33 @@ The design decisions, and what the live scans showed:
   metadata (no `last_altered`, no `__TABLES__` analogue), and inferring it from the query
   history would both breach the retention window and break the "metadata, never query history"
   rule, so the check is gated off in the CLI the way the partitioning check is BigQuery-only.
+  `SYS_LOAD_HISTORY` was considered and rejected: it records only `COPY` loads (tables fed by
+  `INSERT`, CTAS, or streaming leave no row), and its retention is the same unmeasured SYS
+  window — if that window is shorter than `--stale-source-days`, any table with a row was
+  loaded within retention and can never look stale, so the check could never fire. Revisit
+  only if the retention measurement shows a window comfortably longer than the threshold.
 - **Connection comes from `REDSHIFT_*` environment variables** (`HOST`, `USER`, `PASSWORD`,
   optional `DATABASE` and `PORT`). redshift-connector has no named-connection file like
   connections.toml, and env vars keep credentials off disk; the database defaults to the one
-  inferred from the models, like `--project` elsewhere. Unlike the partitioning check on
-  BigQuery, no Redshift-specific check ranks sort/distribution keys: Redshift manages both
-  automatically by default.
+  inferred from the models, like `--project` elsewhere. Because the endpoint lives in an env
+  var rather than a flag, `REDSHIFT_HOST` joins the scan-cache key, so two workgroups sharing
+  a database name never serve each other's cached rows.
+- **A Redshift-only table-hygiene check reads the `SVV_TABLE_INFO` maintenance columns**
+  (`verdict/redshift_hygiene.py`), the Redshift counterpart of the BigQuery-only partitioning
+  check. It flags tables of 1 GiB or more (at most 20) whose `unsorted` region is 20% or
+  larger (scans stop pruning until VACUUM runs), whose `stats_off` is 10 or more (stale
+  planner statistics; ANALYZE resets it), or whose `skew_rows` ratio is 4 or more (one slice
+  becomes the bottleneck) — AWS's own maintenance lines, held as module constants rather than
+  flags. Ranking is by the bytes user queries scanned from each table (stored size as the
+  fallback), so the top entry is the maintenance fix that saves the most. The columns can be
+  NULL (no sortable data, zero rows, DISTSTYLE ALL) and parse as 0, which never trips a
+  threshold, and an empty result renders as nothing: on Serverless and modern provisioned
+  clusters automatic vacuum and analyze usually keep every figure near zero, so an empty
+  check is the healthy state, not a failure. The rejected alternative — ranking raw
+  sort/distribution-key declarations like the partitioning check ranks `partition_by` —
+  stays rejected: Redshift assigns both automatically, so a bare declaration is not debt;
+  only measured neglect is. Review-only, one extra system-view read, and it never feeds any
+  unused figure.
 
 ## The rarely-used band and the hygiene checks
 
@@ -309,7 +332,9 @@ surfaced: a query run in a different GCP project than the scan targets never app
 project's `INFORMATION_SCHEMA.JOBS`, which is exactly the project-scoping the up-front
 permission check exists for.
 
-Three hygiene stats ride along, all computed from dbt's own files with no warehouse call.
+Three hygiene stats ride along, all computed from dbt's own files with no warehouse call
+(the Redshift table-hygiene check is the one exception, costing a single cheap
+`SVV_TABLE_INFO` read; see the Redshift section).
 `verdict/coverage.py` counts models with at least one test and models and columns with
 descriptions (the column denominator prefers the catalog's physical columns, and the sentence
 says which universe was used). `verdict/drift.py` reports documentation drift: a column

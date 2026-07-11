@@ -18,10 +18,16 @@ from dbt_debt.report.scorecard import (
     RarelyUsedModel,
     Scorecard,
     StaleSource,
+    UnhealthyTable,
     UnpartitionedTable,
     UnusedSource,
 )
 from dbt_debt.verdict.coverage import Coverage
+from dbt_debt.verdict.redshift_hygiene import (
+    SKEW_THRESHOLD,
+    STATS_OFF_THRESHOLD,
+    UNSORTED_THRESHOLD,
+)
 
 _UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
@@ -195,6 +201,16 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
         for table in scorecard.unpartitioned_tables:
             lines.append(f"  - {_format_unpartitioned(table)}")
 
+    if scorecard.unhealthy_tables:
+        count = len(scorecard.unhealthy_tables)
+        lines += [
+            "",
+            f"Large tables whose maintenance has fallen behind ({count}; run VACUUM or "
+            "ANALYZE, most bytes scanned first):",
+        ]
+        for unhealthy in scorecard.unhealthy_tables:
+            lines.append(f"  - {_format_unhealthy(unhealthy)}")
+
     if detail:
         lines += _detail_section(scorecard)
 
@@ -239,6 +255,16 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
         for table in scorecard.unpartitioned_tables:
             path = f"  {table.file_path}" if table.file_path else ""
             lines.append(f"  - {_format_unpartitioned(table)}{path}")
+    if scorecard.unhealthy_tables:
+        count = len(scorecard.unhealthy_tables)
+        lines += ["", f"Large tables whose maintenance has fallen behind ({count}):"]
+        for unhealthy in scorecard.unhealthy_tables:
+            path = f"  {unhealthy.file_path}" if unhealthy.file_path else ""
+            lines.append(f"  - {_format_unhealthy(unhealthy)}{path}")
+        lines.append(
+            "  (from SVV_TABLE_INFO; VACUUM fixes the unsorted region, ANALYZE the stale "
+            "statistics, and skew needs a distribution-key review)"
+        )
     columns = scorecard.columns
     if columns is not None:
         lines += _detail_columns(columns.dead_columns)
@@ -532,6 +558,25 @@ def _format_unpartitioned(table: UnpartitionedTable) -> str:
     """`name (12.0 GB, table, 3.4 GB scanned)`; the scanned part is dropped when nothing read it."""
 
     parts = [humanize_bytes(table.total_bytes), table.materialized]
+    if table.bytes_scanned > 0:
+        parts.append(f"{humanize_bytes(table.bytes_scanned)} scanned")
+    return f"{table.name} ({', '.join(parts)})"
+
+
+def _format_unhealthy(table: UnhealthyTable) -> str:
+    """`name (12.0 GB, 42% unsorted, stats 100% stale, 5.2x skew, 3.4 GB scanned)`.
+
+    Only the figures at or above their threshold appear — each one names the maintenance it
+    calls for — and the scanned part is dropped when nothing read the table.
+    """
+
+    parts = [humanize_bytes(table.total_bytes)]
+    if table.unsorted_percent >= UNSORTED_THRESHOLD:
+        parts.append(f"{table.unsorted_percent:.0f}% unsorted")
+    if table.stats_off_percent >= STATS_OFF_THRESHOLD:
+        parts.append(f"stats {table.stats_off_percent:.0f}% stale")
+    if table.skew_rows >= SKEW_THRESHOLD:
+        parts.append(f"{table.skew_rows:.1f}x skew")
     if table.bytes_scanned > 0:
         parts.append(f"{humanize_bytes(table.bytes_scanned)} scanned")
     return f"{table.name} ({', '.join(parts)})"

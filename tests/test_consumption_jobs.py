@@ -16,6 +16,7 @@ from dbt_debt.consumption.jobs import (
     source_last_modified_query,
     parse_query_text_rows,
     parse_relation_rows,
+    parse_table_hygiene_rows,
     parse_table_storage_rows,
     parse_usage_rows,
     query_text_query,
@@ -99,6 +100,34 @@ def test_parse_table_storage_rows_lowercases_keys_and_reads_nulls_as_zero() -> N
     assert parse_table_storage_rows(rows) == {
         "db.s.t": TableStorage(active_bytes=10, time_travel_bytes=5, failsafe_bytes=2),
         "db.s.dropped": TableStorage(active_bytes=0, time_travel_bytes=0, failsafe_bytes=0),
+    }
+
+
+def test_parse_table_hygiene_rows_lowercases_keys_and_reads_nulls_as_zero() -> None:
+    from dbt_debt.domain import TableHygiene
+
+    rows = [
+        {
+            "relation_key": "DB.S.T",
+            "unsorted_percent": 42.5,
+            "stats_off_percent": 10,
+            "skew_rows": 4.2,
+            "total_rows": 100,
+            "active_bytes": 1024,
+        },
+        {"relation_key": "db.s.bare", "unsorted_percent": None},
+    ]
+    assert parse_table_hygiene_rows(rows) == {
+        "db.s.t": TableHygiene(
+            unsorted_percent=42.5,
+            stats_off_percent=10,
+            skew_rows=4.2,
+            total_rows=100,
+            active_bytes=1024,
+        ),
+        "db.s.bare": TableHygiene(
+            unsorted_percent=0, stats_off_percent=0, skew_rows=0, total_rows=0, active_bytes=0
+        ),
     }
 
 

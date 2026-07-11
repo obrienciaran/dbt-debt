@@ -26,7 +26,7 @@ from dbt_debt.consumption.client import (
     MissingPermissionError,
     WarehouseError,
 )
-from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
+from dbt_debt.domain import TableHygiene, TableStorage, UsageRow, WarehouseRelation
 
 _PERMISSION_HINT = (
     "the SYS query-history views show a regular user only their own queries, so 'unused' would "
@@ -137,6 +137,10 @@ class RealRedshiftClient:
     def table_storage(self) -> dict[str, TableStorage]:
         sql = redshift_queries.table_storage_query()
         return jobs.parse_table_storage_rows(self._run_wrapped(sql, "storage metrics"))
+
+    def table_hygiene(self) -> dict[str, TableHygiene]:
+        sql = redshift_queries.table_hygiene_query()
+        return jobs.parse_table_hygiene_rows(self._run_wrapped(sql, "table hygiene"))
 
     def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
         """Always empty: Redshift exposes no last-data-received metadata to read.

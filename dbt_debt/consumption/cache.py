@@ -3,7 +3,8 @@
 `CachingWarehouseClient` is a decorator implementing the `WarehouseClient` Protocol, so it
 composes with any real client and is exercised by the same `FakeWarehouseClient` in tests. It
 memoizes the slow warehouse round-trips (`table_usage`, `query_texts`, `relation_first_seen`,
-`existing_relations`, `table_storage`, `source_last_modified`) to JSON files keyed by the query
+`existing_relations`, `table_storage`, `table_hygiene`, `source_last_modified`) to JSON files
+keyed by the query
 parameters — never the manifest, which warehouse results don't depend on. The permission
 preflight is delegated, never cached, because permissions can change and the check is
 load-bearing.
@@ -31,7 +32,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from dbt_debt.consumption.client import WarehouseClient
-from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
+from dbt_debt.domain import TableHygiene, TableStorage, UsageRow, WarehouseRelation
 
 CACHE_ROOT_NAME = "dbt-debt-cache"
 
@@ -118,6 +119,26 @@ def _storage_from_json(data: dict[str, list[int]]) -> dict[str, TableStorage]:
     }
 
 
+def _hygiene_to_json(data: dict[str, TableHygiene]) -> dict[str, list[float]]:
+    return {
+        key: [h.unsorted_percent, h.stats_off_percent, h.skew_rows, h.total_rows, h.active_bytes]
+        for key, h in data.items()
+    }
+
+
+def _hygiene_from_json(data: dict[str, list[float]]) -> dict[str, TableHygiene]:
+    return {
+        key: TableHygiene(
+            unsorted_percent=values[0],
+            stats_off_percent=values[1],
+            skew_rows=values[2],
+            total_rows=int(values[3]),
+            active_bytes=int(values[4]),
+        )
+        for key, values in data.items()
+    }
+
+
 class CachingWarehouseClient:
     """Wrap an inner `WarehouseClient`, serving the slow calls from a TTL-bounded disk cache."""
 
@@ -183,6 +204,15 @@ class CachingWarehouseClient:
             self._inner.table_storage,
             _storage_to_json,
             _storage_from_json,
+        )
+
+    def table_hygiene(self) -> dict[str, TableHygiene]:
+        return self._cached(
+            "table_hygiene",
+            {},
+            self._inner.table_hygiene,
+            _hygiene_to_json,
+            _hygiene_from_json,
         )
 
     def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:

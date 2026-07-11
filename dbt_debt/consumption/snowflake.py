@@ -23,7 +23,7 @@ from dbt_debt.consumption.client import (
     MissingPermissionError,
     WarehouseError,
 )
-from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
+from dbt_debt.domain import TableHygiene, TableStorage, UsageRow, WarehouseRelation
 
 _PERMISSION_HINT = (
     "reading SNOWFLAKE.ACCOUNT_USAGE needs IMPORTED PRIVILEGES on the SNOWFLAKE database, and "
@@ -112,6 +112,12 @@ class RealSnowflakeClient:
     def table_storage(self) -> dict[str, TableStorage]:
         sql = snowflake_queries.table_storage_query()
         return jobs.parse_table_storage_rows(self._run_wrapped(sql, "storage metrics"))
+
+    def table_hygiene(self) -> dict[str, TableHygiene]:
+        """Always empty: Snowflake micro-partitions and maintains tables automatically and
+        exposes no maintenance columns; the CLI only calls this on Redshift."""
+
+        return {}
 
     def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
         if not datasets:

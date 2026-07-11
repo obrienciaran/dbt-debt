@@ -19,7 +19,7 @@ from dbt_debt.consumption.client import (
     WarehouseError,
 )
 from dbt_debt.consumption.exclusion import exclusion_clause
-from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
+from dbt_debt.domain import TableHygiene, TableStorage, UsageRow, WarehouseRelation
 
 
 class RealBigQueryClient:
@@ -94,6 +94,12 @@ class RealBigQueryClient:
     def table_storage(self) -> dict[str, TableStorage]:
         """Always empty: BigQuery has no billing-grade storage view readable with our grants
         (`TABLE_STORAGE` needs `bigquery.tables.list`), so sizes come from catalog.json."""
+
+        return {}
+
+    def table_hygiene(self) -> dict[str, TableHygiene]:
+        """Always empty: BigQuery manages storage layout itself and exposes no maintenance
+        columns; the CLI only calls this on Redshift."""
 
         return {}
 

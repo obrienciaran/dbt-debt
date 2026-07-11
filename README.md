@@ -132,6 +132,12 @@ that history".
   bytes user queries scanned over the window, most scanned first, so the top entry is the
   partitioning fix that saves the most. BigQuery only: Snowflake micro-partitions
   automatically, and Redshift manages sort and distribution itself.
+- **large tables needing maintenance (Redshift only).** A table of 1 GB or more whose
+  `SVV_TABLE_INFO` row shows a big unsorted region (20%+, needs VACUUM), stale planner
+  statistics (`stats_off` 10+, needs ANALYZE), or heavy slice skew (4x+, needs a
+  distribution-key review). Listed with stored size and the bytes user queries scanned, most
+  scanned first. Automatic vacuum and analyze usually keep this list empty — an empty list is
+  the healthy state, and BigQuery and Snowflake maintain storage layout themselves.
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage
   you'd reclaim; on Snowflake and Redshift the sizes come live from the warehouse (no
   `dbt docs generate` needed), and Snowflake's include the time-travel and fail-safe copies

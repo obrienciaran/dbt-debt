@@ -21,6 +21,7 @@ from dbt_debt.domain import (
     ColumnRef,
     Manifest,
     Relation,
+    TableHygiene,
     TableStorage,
     UsageRow,
     WarehouseRelation,
@@ -35,6 +36,7 @@ from dbt_debt.verdict.models import dead_models
 from dbt_debt.verdict.orphans import orphaned_relations, undeclared_sources
 from dbt_debt.verdict.partitioning import unpartitioned_large_tables
 from dbt_debt.verdict.rarity import rarely_used_models
+from dbt_debt.verdict.redshift_hygiene import unhealthy_tables
 from dbt_debt.verdict.semantic import AffectedSemanticConsumer, affected_semantic_consumers
 from dbt_debt.verdict.sources import unused_sources
 from dbt_debt.verdict.staleness import stale_sources
@@ -172,6 +174,29 @@ class UnpartitionedTable:
 
 
 @dataclass(frozen=True)
+class UnhealthyTable:
+    """A large Redshift table whose maintenance has fallen behind, per `SVV_TABLE_INFO`.
+
+    `unsorted_percent` (a big unsorted region means scans stop pruning until VACUUM runs),
+    `stats_off_percent` (stale planner statistics; ANALYZE resets it), and `skew_rows` (the
+    largest-to-smallest slice row ratio) carry the figures that tripped the check — the
+    renderer shows only the ones at or above their threshold. `total_bytes` is the stored
+    size; `bytes_scanned` is what user queries read from it over the window, and the list is
+    ranked by it, so the top entry is the maintenance fix that saves the most.
+    """
+
+    unique_id: str
+    name: str
+    relation_key: str
+    total_bytes: int
+    unsorted_percent: float
+    stats_off_percent: float
+    skew_rows: float
+    bytes_scanned: int = 0
+    file_path: str | None = None
+
+
+@dataclass(frozen=True)
 class DeadColumn:
     """A dead column; `blocked` flags those not trivially removable, `file_path` its defining model.
 
@@ -270,6 +295,9 @@ class Scorecard:
     """Test/docs coverage counts; None only on handcrafted scorecards (assembly always sets it)."""
     unpartitioned_tables: tuple[UnpartitionedTable, ...] = ()
     """BigQuery only: large tables declaring neither partition_by nor cluster_by."""
+    unhealthy_tables: tuple[UnhealthyTable, ...] = ()
+    """Redshift only: large tables with a big unsorted region, stale statistics, or heavy
+    slice skew. Usually empty where automatic vacuum and analyze keep up — the healthy state."""
     unused_sources: tuple[UnusedSource, ...] = ()
     """Declared sources nothing in the project reads; a review list, never counted unused."""
     stale_sources: tuple[StaleSource, ...] = ()
@@ -323,6 +351,7 @@ def build_scorecard(
     catalog_columns: Mapping[str, Sequence[str]] | None = None,
     last_modified: Mapping[str, datetime] | None = None,
     table_storage: Mapping[str, TableStorage] | None = None,
+    table_hygiene: Mapping[str, TableHygiene] | None = None,
 ) -> Scorecard:
     """Combine usage, DAG propagation, and manifest traversals into a `Scorecard`.
 
@@ -334,8 +363,8 @@ def build_scorecard(
     ACCOUNT_USAGE.TABLES lags behind reality. Queried nodes with at most `config.rare_threshold`
     queries land in the separate rarely-used review band, which feeds none of those figures
     either. `table_storage` (Snowflake only) adds the time-travel/fail-safe breakdown to the
-    dead-asset lists; the totals and ranking come from `storage_bytes` as ever. `now` is
-    injectable for tests.
+    dead-asset lists; the totals and ranking come from `storage_bytes` as ever. `table_hygiene`
+    (Redshift only) feeds the table-hygiene review check. `now` is injectable for tests.
     """
 
     usage_rows = list(usage_rows)
@@ -454,12 +483,14 @@ def build_scorecard(
         for uid, column in phantom_columns(manifest.models, catalog_columns or {})
     )
 
+    # Both warehouse-specific checks rank by the bytes user queries scanned (from the usage
+    # rows already fetched), so the costliest offender is first.
+    scanned_by_key = {row.relation_key: row.bytes_scanned for row in usage_rows}
+
     # The partitioning check is BigQuery-specific: Snowflake micro-partitions automatically and
-    # its explicit clustering keys are optional tuning, not debt. Ranked by the bytes user
-    # queries scanned (from the usage rows already fetched), so the costliest offender is first.
+    # its explicit clustering keys are optional tuning, not debt.
     unpartitioned: tuple[UnpartitionedTable, ...] = ()
     if config.warehouse == "bigquery":
-        scanned_by_key = {row.relation_key: row.bytes_scanned for row in usage_rows}
         unpartitioned = tuple(
             UnpartitionedTable(
                 unique_id=uid,
@@ -472,6 +503,35 @@ def build_scorecard(
             )
             for uid in unpartitioned_large_tables(
                 manifest.models, storage_bytes, scanned_bytes=scanned_by_key
+            )
+        )
+
+    # The hygiene check is Redshift-specific: BigQuery and Snowflake maintain storage layout
+    # automatically and expose no maintenance columns. The sizes on the entries come from the
+    # hygiene rows themselves — warehouse truth, present even without a catalog.
+    hygiene_by_key = dict(table_hygiene or {})
+    unhealthy: tuple[UnhealthyTable, ...] = ()
+    if config.warehouse == "redshift":
+
+        def unhealthy_entry(uid: str) -> UnhealthyTable:
+            model = manifest.models[uid]
+            row = hygiene_by_key[model.relation_key]
+            return UnhealthyTable(
+                unique_id=uid,
+                name=model.name,
+                relation_key=model.relation_key,
+                total_bytes=row.active_bytes,
+                unsorted_percent=row.unsorted_percent,
+                stats_off_percent=row.stats_off_percent,
+                skew_rows=row.skew_rows,
+                bytes_scanned=scanned_by_key.get(model.relation_key, 0),
+                file_path=model.original_file_path,
+            )
+
+        unhealthy = tuple(
+            unhealthy_entry(uid)
+            for uid in unhealthy_tables(
+                manifest.models, hygiene_by_key, scanned_bytes=scanned_by_key
             )
         )
 
@@ -524,6 +584,7 @@ def build_scorecard(
         reclaimable_bytes=reclaimable,
         coverage=coverage(manifest, catalog_columns),
         unpartitioned_tables=unpartitioned,
+        unhealthy_tables=unhealthy,
         unused_sources=unused_source_entries,
         stale_sources=stale_entries,
         stale_days=config.stale_source_days,

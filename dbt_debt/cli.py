@@ -10,6 +10,7 @@ warehouse itself is auto-detected from the manifest's `adapter_type` (overridabl
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections import Counter
 from dataclasses import replace
@@ -28,7 +29,7 @@ from dbt_debt.consumption.client import (
 )
 from dbt_debt.consumption.columns import consumed_model_columns
 from dbt_debt.consumption.exclusion import validate_query_comment_pattern
-from dbt_debt.domain import Manifest, TableStorage, WarehouseRelation
+from dbt_debt.domain import Manifest, TableHygiene, TableStorage, WarehouseRelation
 from dbt_debt.lineage.sqlglot_source import SqlglotLineage
 from dbt_debt.references import model_relation_references
 from dbt_debt.report.render_json import render_json, render_orphans_json
@@ -67,6 +68,12 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
         with status("Reading storage metrics"):
             table_storage = client.table_storage()
         storage.update({key: s.active_bytes for key, s in table_storage.items()})
+    # The table-hygiene check reads SVV_TABLE_INFO's maintenance columns, which only Redshift
+    # exposes; the other warehouses maintain storage layout automatically.
+    table_hygiene: dict[str, TableHygiene] = {}
+    if config.warehouse == "redshift":
+        with status("Reading table hygiene"):
+            table_hygiene = client.table_hygiene()
     with status("Analysing column usage"):
         column_report = _column_report(config, client, manifest, catalog, storage)
     references = model_relation_references(manifest, dialect=config.dialect)
@@ -106,6 +113,7 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
         catalog_columns=catalog_columns,
         last_modified=last_modified,
         table_storage=table_storage,
+        table_hygiene=table_hygiene,
     )
 
 
@@ -437,6 +445,9 @@ def _wrap_cache(client: WarehouseClient, config: Config, project: str | None) ->
     key_parts = {
         "warehouse": config.warehouse,
         "connection": config.connection or "",
+        # Redshift's connection is env-var based, so the endpoint joins the key here — two
+        # workgroups sharing a database name must never serve each other's cached rows.
+        "endpoint": os.environ.get("REDSHIFT_HOST", "") if config.warehouse == "redshift" else "",
         "project": project or "",
         "region": config.region,
         "lookback_days": str(config.lookback_days),

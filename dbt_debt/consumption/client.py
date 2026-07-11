@@ -11,7 +11,7 @@ from collections.abc import Set
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
+from dbt_debt.domain import TableHygiene, TableStorage, UsageRow, WarehouseRelation
 
 
 class WarehouseError(RuntimeError):
@@ -77,6 +77,15 @@ class WarehouseClient(Protocol):
         the usage preflight); Redshift reads `SVV_TABLE_INFO` (active bytes only); BigQuery
         has no equivalent surface and returns an empty dict, so its sizes come from
         catalog.json alone.
+        """
+        ...
+
+    def table_hygiene(self) -> dict[str, TableHygiene]:
+        """relation_key -> maintenance state, for the Redshift-only table-hygiene check.
+
+        Redshift reads the `SVV_TABLE_INFO` maintenance columns (unsorted region, statistics
+        staleness, slice skew); BigQuery and Snowflake manage these automatically, expose no
+        equivalent, and return an empty dict — the CLI only calls this on Redshift.
         """
         ...
 

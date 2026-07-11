@@ -308,6 +308,59 @@ def test_render_text_coverage_sentences_and_unpartitioned_tables() -> None:
     assert data["unpartitioned_tables"][0]["name"] == "events"
 
 
+def test_render_text_unhealthy_tables_show_only_tripped_figures() -> None:
+    from dbt_debt.report.scorecard import UnhealthyTable
+
+    card = Scorecard(
+        project_name="jaffle_shop",
+        lookback_days=180,
+        active_models=3,
+        unused_models=0,
+        unhealthy_tables=(
+            UnhealthyTable(
+                unique_id="model.x.events",
+                name="events",
+                relation_key="db.s.events",
+                total_bytes=12 * 1024**3,
+                unsorted_percent=42.0,
+                stats_off_percent=0.0,
+                skew_rows=5.2,
+                bytes_scanned=30 * 1024**3,
+                file_path="models/events.sql",
+            ),
+            UnhealthyTable(
+                unique_id="model.x.archive",
+                name="archive",
+                relation_key="db.s.archive",
+                total_bytes=8 * 1024**3,
+                unsorted_percent=0.0,
+                stats_off_percent=100.0,
+                skew_rows=0.0,
+            ),
+        ),
+    )
+    text = render_text(card, detail=True)
+    assert "Large tables whose maintenance has fallen behind (2" in text
+    # Only the figures at or above their threshold appear, and the scanned part is dropped
+    # when the window saw no reads of the table.
+    assert "- events (12.0 GB, 42% unsorted, 5.2x skew, 30.0 GB scanned)" in text
+    assert "- archive (8.0 GB, stats 100% stale)" in text
+    assert "models/events.sql" in text
+    assert "VACUUM fixes the unsorted region" in text
+    data = json.loads(render_json(card))
+    assert data["unhealthy_tables"][0]["name"] == "events"
+    assert data["unhealthy_tables"][0]["unsorted_percent"] == 42.0
+
+
+def test_render_text_without_unhealthy_tables_says_nothing_about_maintenance() -> None:
+    card = Scorecard(
+        project_name="jaffle_shop", lookback_days=180, active_models=3, unused_models=0
+    )
+    # The empty check is the healthy state on Redshift and the only state elsewhere; it must
+    # render as nothing, not noise.
+    assert "maintenance" not in render_text(card, detail=True)
+
+
 def test_render_text_tags_dead_seeds_and_snapshots() -> None:
     card = Scorecard(
         project_name="jaffle_shop",

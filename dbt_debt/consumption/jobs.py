@@ -14,7 +14,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
-from dbt_debt.domain import TableStorage, UsageRow, WarehouseRelation
+from dbt_debt.domain import TableHygiene, TableStorage, UsageRow, WarehouseRelation
 
 _REGION_RE = re.compile(r"^[A-Za-z0-9-]+$")
 _PROJECT_RE = re.compile(r"^[A-Za-z0-9-]+$")
@@ -216,6 +216,21 @@ def parse_table_storage_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, Tab
             active_bytes=int(row.get("active_bytes") or 0),
             time_travel_bytes=int(row.get("time_travel_bytes") or 0),
             failsafe_bytes=int(row.get("failsafe_bytes") or 0),
+        )
+        for row in rows
+    }
+
+
+def parse_table_hygiene_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, TableHygiene]:
+    """Parse hygiene rows into a relation_key -> `TableHygiene` map (NULL or absent values read as 0)."""
+
+    return {
+        str(row["relation_key"]).lower(): TableHygiene(
+            unsorted_percent=float(row.get("unsorted_percent") or 0),
+            stats_off_percent=float(row.get("stats_off_percent") or 0),
+            skew_rows=float(row.get("skew_rows") or 0),
+            total_rows=int(row.get("total_rows") or 0),
+            active_bytes=int(row.get("active_bytes") or 0),
         )
         for row in rows
     }

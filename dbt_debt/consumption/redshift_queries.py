@@ -182,6 +182,31 @@ FROM {_TABLE_INFO}
 """.strip()
 
 
+def table_hygiene_query() -> str:
+    """Per-relation maintenance state, for the Redshift-only table-hygiene check.
+
+    Reads the SVV_TABLE_INFO maintenance columns alongside the size: `unsorted` (percent of
+    rows outside the sort order), `stats_off` (staleness of the planner's statistics), and
+    `skew_rows` (largest-to-smallest slice row ratio). All three can be NULL (no sortable
+    data, zero rows, DISTSTYLE ALL); COALESCE reads them as 0, which never trips a threshold.
+    On Serverless, automatic vacuum and analyze usually keep every figure near zero — an
+    empty check is the healthy state. Carrying `active_bytes` here lets the verdict apply
+    its size floor from these rows alone; SVV_TABLE_INFO omits empty tables, which is
+    harmless (an empty table needs no maintenance).
+    """
+
+    return f"""
+SELECT
+  LOWER("database" || '.' || "schema" || '.' || "table") AS relation_key,
+  COALESCE(unsorted, 0) AS unsorted_percent,
+  COALESCE(stats_off, 0) AS stats_off_percent,
+  COALESCE(skew_rows, 0) AS skew_rows,
+  COALESCE(tbl_rows, 0) AS total_rows,
+  COALESCE(size, 0) * 1024 * 1024 AS active_bytes
+FROM {_TABLE_INFO}
+""".strip()
+
+
 def existing_relations_query(database: str, schemas: Iterable[str]) -> str:
     """All tables and views in `database` limited to `schemas`, for orphan discovery.
 

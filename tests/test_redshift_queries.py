@@ -16,6 +16,7 @@ from dbt_debt.consumption.redshift_queries import (
     first_seen_query,
     permission_probe_query,
     query_text_query,
+    table_hygiene_query,
     table_storage_query,
     table_usage_query,
 )
@@ -130,3 +131,17 @@ def test_table_storage_query_converts_blocks_to_bytes() -> None:
     assert 'LOWER("database" || \'.\' || "schema" || \'.\' || "table")' in sql
     assert "time_travel_bytes" not in sql
     assert "failsafe_bytes" not in sql
+
+
+def test_table_hygiene_query_reads_the_maintenance_columns_with_nulls_as_zero() -> None:
+    sql = table_hygiene_query()
+    # The maintenance columns can all be NULL (no sortable data, zero rows, DISTSTYLE ALL);
+    # COALESCE reads them as 0, which never trips a threshold. Size rides along in bytes so
+    # the verdict applies its floor from these rows alone.
+    assert "FROM svv_table_info" in sql
+    assert "COALESCE(unsorted, 0) AS unsorted_percent" in sql
+    assert "COALESCE(stats_off, 0) AS stats_off_percent" in sql
+    assert "COALESCE(skew_rows, 0) AS skew_rows" in sql
+    assert "COALESCE(tbl_rows, 0) AS total_rows" in sql
+    assert "COALESCE(size, 0) * 1024 * 1024 AS active_bytes" in sql
+    assert 'LOWER("database" || \'.\' || "schema" || \'.\' || "table")' in sql

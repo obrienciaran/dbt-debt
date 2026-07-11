@@ -3,8 +3,8 @@
 The Redshift analogue of `jobs` and `snowflake_queries`: kept free of any Redshift client so
 the query shape is unit-testable with plain strings, and the row parsers in `jobs`
 (warehouse-neutral: they read rows by key) are reused by the real client. Written from AWS's
-published system-view schemas and not yet validated live — see DESIGN.md for what remains
-inferred.
+published system-view schemas and validated live against a Serverless workgroup — see
+DESIGN.md's Redshift section for what is confirmed and what remains open.
 
 Usage comes from `SYS_QUERY_DETAIL` scan steps, whose `table_name` records each relation a
 query physically read — the engine-metadata analogue of BigQuery's `referenced_tables` and

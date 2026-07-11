@@ -8,8 +8,8 @@ connector is an optional extra (`pip install 'dbt-debt[redshift]'`).
 Connection details come from environment variables (`REDSHIFT_HOST`, `REDSHIFT_USER`,
 `REDSHIFT_PASSWORD`, optional `REDSHIFT_DATABASE` and `REDSHIFT_PORT`): redshift-connector has
 no named-connection file like Snowflake's connections.toml, and env vars keep credentials out
-of both the repository and the shell history. Not yet validated against a live workgroup — see
-DESIGN.md for what remains inferred.
+of both the repository and the shell history. Core loop validated against a live Serverless
+workgroup — see DESIGN.md's Redshift section for what is confirmed and what remains open.
 """
 
 from __future__ import annotations

@@ -2,10 +2,9 @@
 
 This doc explains how `dbt-debt` is built. For how to use it, see [`README.md`](README.md).
 The tool covers BigQuery, Snowflake, and Redshift, runs as a standalone Python command-line
-program, and works at both the model and the column level. BigQuery and Snowflake are
-validated against live data; Redshift is built from AWS's published system-view schemas and
-awaits its first live validation. The Snowflake and Redshift sections list what is confirmed
-and what remains open.
+program, and works at both the model and the column level. All three warehouses are validated
+against live data. The Snowflake and Redshift sections list what is confirmed and what
+remains open.
 
 Two words come up throughout. A **model** is one of your `.sql` files. A **relation** is the
 actual table or view that model builds in the warehouse.
@@ -207,30 +206,48 @@ Built to the same recipe as Snowflake — one pure query-builder module
 (`consumption/redshift_queries.py`), one lazy SDK client (`consumption/redshift.py`, the
 `[redshift]` optional extra, `redshift-connector`), and the sqlglot `redshift` dialect. The
 SYS system views the scan reads work on both Serverless workgroups and provisioned clusters.
-The adapter is built from AWS's published schemas and pinned by tests; nothing is validated
-live yet, and the `demo_redshift/` project (the same medallion project, pointed at a
-Serverless workgroup) exists to do that.
+The adapter is built from AWS's published schemas, pinned by tests, and its core loop is
+validated live against a Serverless workgroup via `demo_redshift/` (the same medallion
+project): the preflight as the namespace admin, per-relation usage counts matching planted
+queries, dbt-build exclusion, the orphan with direct-query evidence and scanned bytes, the
+too-new guard on dbt-built relations, the result-cache join, and SVV_TABLE_INFO sizes on the
+scorecard, exit 0 end to end.
 
-The design decisions, and what remains to confirm:
+The design decisions, and what the live scans showed:
 
 - **Usage comes from `SYS_QUERY_DETAIL` scan steps joined to `SYS_QUERY_HISTORY`.**
   SYS_QUERY_HISTORY alone has no per-table column, but each scan step in SYS_QUERY_DETAIL
   names the relation it read as a fully qualified `database.schema.table` — the engine-metadata
   analogue of `referenced_tables` and ACCESS_HISTORY, so usage never comes from parsing query
   text. The optimizer's own temp tables (`volt_tt_*`) and the system schemas are filtered out.
-  *To confirm live:* the three-part `table_name` shape, and that dbt-built relations appear in
-  non-scan steps for first-seen.
+  *Confirmed live:* the three-part `table_name` shape, and per-relation counts matching the
+  planted worksheet queries exactly.
 - **Result-cache hits are followed to the originating query.** A cache-hit SELECT runs no scan
   steps, so counting scan steps alone would miss it — the dangerous direction, use looking like
   disuse. `SYS_QUERY_HISTORY.result_cache_query_id` names the originating query, so the usage
   join goes through `COALESCE(NULLIF(result_cache_query_id, 0), query_id)` and a cached repeat
-  counts as use of the tables the original query read. *To confirm live.*
+  counts as use of the tables the original query read. *Confirmed live:* an identical repeat
+  came back with `result_cache_hit` true and its source's query id, and both runs counted.
 - **The preflight checks visibility, not access.** Every user can select from the SYS views;
   Redshift silently filters them to the user's own rows unless they are a superuser or hold
   `SYSLOG ACCESS UNRESTRICTED`. An access-error probe like the other warehouses' would
   therefore pass wrongly, so the probe instead queries `SVV_USER_INFO` for the current user's
-  own visibility and treats an empty result as the missing permission. *To confirm live:* the
-  SVV_USER_INFO column names (`superuser`, `syslog_access`).
+  own visibility and treats an empty result as the missing permission. *Confirmed live* as a
+  superuser (the column names hold); the regular-user empty-result path is pinned by tests
+  only.
+- **dbt builds surface under `__dbt_tmp` names, folded back in first-seen.** dbt-redshift
+  builds each table as `<name>__dbt_tmp` and renames it into place, and the rename is DDL
+  that SYS_QUERY_DETAIL records under no name (found live) — so the first-seen query strips
+  that suffix, letting the tmp incarnation date the final relation. Without it, dbt-built
+  tables get no first-seen row and the too-new guard never protects them. One residual edge,
+  also found live: a CTAS whose plan scans no base table (the demo's recursive-CTE time
+  spine) is logged as plain `DDL` with *no* named steps at all, so such a relation still has
+  no first-seen date and is judged like BigQuery's zero-jobs case — a fresh model built that
+  way can be called unused before `--min-age-days` passes.
+- **SYS timestamps arrive naive.** The views report UTC as `timestamp without time zone`, so
+  the driver hands back naive datetimes (found live; BigQuery and Snowflake return aware
+  ones). The client stamps UTC on them at its boundary — the verdicts compare against aware
+  `now` values.
 - **Retention caps the window.** AWS documents seven days of history for the older STL views
   and leaves the SYS views' retention unstated. Whatever it is, it bounds both the effective
   `--lookback-days` and how far back `first_seen` can reach, making "unused" a weaker signal
@@ -239,7 +256,7 @@ The design decisions, and what remains to confirm:
   A dead node with no first-seen row means no jobs within retention and is judged normally,
   like BigQuery; the missing-first-seen set-aside stays Snowflake-only (lagging metadata is
   Snowflake's failure mode, not Redshift's). *To measure live:* actual SYS retention
-  (`MIN(start_time)` on a seasoned account).
+  (`MIN(start_time)` on a seasoned account; the demo account is too young to show a floor).
 - **The dbt exclusion reuses the Snowflake form** (`REGEXP_COUNT(query_text, $$...$$) = 0`);
   Redshift supports both the function and dollar-quoted literals. `query_text` is truncated at
   4000 characters, which is harmless: dbt's query-comment leads the statement, and the
@@ -248,7 +265,9 @@ The design decisions, and what remains to confirm:
   replacing catalog sizes where a row exists, like Snowflake's storage metrics. Redshift has
   no time-travel or fail-safe retention, so those fields stay zero and the report shows no
   retained-bytes breakdown. SVV_TABLE_INFO omits empty tables, which then keep their catalog
-  size.
+  size. *Confirmed live:* the sizes land on the scorecard (a 6-row table reports 35 MB — 
+  Redshift's 1 MB-block floor per column slice makes tiny tables look large; the ranking is
+  still right).
 - **Orphans read `SVV_REDSHIFT_TABLES`**, filtered by database and lowercased schema —
   deliberately not SVV_TABLE_INFO, which omits empty tables, and an empty leftover is still an
   orphan.

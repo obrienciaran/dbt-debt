@@ -82,9 +82,11 @@ that history".
   first-seen date, likely a new table"), because the metadata behind the date
   (`ACCOUNT_USAGE.TABLES`) lags about 90 minutes.
 - **active / unused columns.** A column is **unused** if no query read it and nothing read a
-  column built from it. Column reads come from parsing query text, and not every query parses, so
-  the report states its confidence ("column verdicts based on 96% of query text"). Model verdicts
-  never depend on parsing.
+  column built from it. To see which columns a query read, dbt-debt parses the SQL text of every
+  query in the log. Some SQL fails to parse and is left out, so the report says how much of the
+  query text it could read ("column verdicts based on 96% of query text"), the verdicts rest on
+  that share, and the unparsed remainder could contain column reads the scan did not see. Model
+  verdicts come from the query log's own metadata and never depend on parsing.
 - **columns you could remove.** Unused columns nothing in the project still depends on (no data
   test, no contract). These are suggestions, not an automatic delete, since "unused" comes from
   the query log, which can't see everything (see *What counts as usage*). An unused column that
@@ -95,16 +97,20 @@ that history".
   team has written into the dbt project. An unused model feeding one is flagged "affected" so you
   check before removing it. Exposures whose models are all active aren't listed.
 - **exposures that are likely dead.** When *every* model an exposure reads is unused, the dashboard
-  itself is probably dead. Listed by name, separately from the merely affected, as candidates to retire.
+  itself is probably dead. These are listed by name as candidates to retire, separately from the
+  affected exposures above, which still have at least one active model behind them.
 - **semantic-layer consumers affected.** An unused model feeding a semantic model, metric, or
   saved query (even through a chain of metrics) is flagged for review the same way, and a column
-  a semantic model names is never counted as removable. Each consumer is listed with what makes
-  it affected: the unused model it is built on, or the affected consumer it reads through
-  ("via"), so you can see the whole chain from the saved query down to the model.
+  a semantic model names is never counted as removable. Each consumer is listed with the reason
+  it appears. Either it is built directly on an unused model, or it reads from another listed
+  consumer that is affected in turn (shown as "via"). Following the "via" lines walks the whole
+  chain from the saved query down to the unused model.
 - **tables with no dbt model behind them (orphans).** A real table or view in a dataset dbt
   builds into, but with no dbt record, usually left over from a renamed or deleted model, or
-  made by hand. Only datasets dbt builds into are searched, so raw input tables are never
-  flagged. Each is listed with any direct queries people ran against it (count, last date,
+  made by hand. Only the datasets dbt builds into are searched. The datasets dbt merely reads
+  from (where declared sources live, filled by loaders outside dbt) are never searched, because
+  dbt having no record of a table is normal there and every raw input table would be flagged.
+  Each is listed with any direct queries people ran against it (count, last date,
   bytes scanned); a queried orphan is still in use and dangerous to drop, so those come first.
 - **tables your models read but dbt was never told about.** A model reads a table you never
   declared; add it as a `source()`. Found by reading the model's SQL, so it needs no extra
@@ -113,8 +119,8 @@ that history".
   or semantic-layer consumer references. Each is listed with its file path and any direct queries
   people ran against the raw table (count, last date, bytes scanned), so you can tell a dead
   declaration (delete the entry) from a table your team reads outside dbt (consider modelling
-  it). A test on the source doesn't count as use. A review list; never feeds the unused-model
-  figures.
+  it). A data test attached to the source is a declaration, not a read, so it does not stop the
+  source appearing here. This list is for review only and never changes the unused-model figures.
 - **stale sources.** A declared source with no new data for more than 30 days
   (`--stale-source-days`; `0` turns the check off), which usually means the loader upstream of
   dbt has stopped. The date comes from warehouse metadata. BigQuery needs read access to the
@@ -127,7 +133,7 @@ that history".
   first if the catalog is old.
 - **coverage.** Three hygiene sentences covering how many models have at least one test, how many
   have a description, and how many columns do. The column figure counts the real columns from
-  `catalog.json` when present (and says so), else the ones declared in YAML.
+  `catalog.json` when present, else the ones declared in YAML.
 - **large tables without partitioning or clustering (BigQuery only).** A table or incremental
   model of 1 GB or more built with neither `partition_by` nor `cluster_by` gets a full scan from
   every query that touches it. The offenders (up to 20) are listed with stored size and the

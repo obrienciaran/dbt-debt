@@ -8,6 +8,7 @@ the prune-on-construction sweep is the teardown that keeps the cache from persis
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from dbt_debt.consumption.cache import (
     _usage_from_json,
     _usage_to_json,
     cache_dir_for,
+    cache_root,
 )
 from dbt_debt.domain import TableHygiene, TableStorage, UsageRow, WarehouseRelation
 from tests.fakes import FakeWarehouseClient
@@ -176,11 +178,41 @@ def test_valid_json_of_the_wrong_shape_is_also_a_miss(tmp_path: Path) -> None:
     assert fresh_inner.calls["query_texts"] == 1
 
 
-def test_cache_dir_for_is_under_temp_and_project_specific(tmp_path: Path) -> None:
+def test_cache_dir_for_is_under_the_user_cache_and_project_specific(tmp_path: Path) -> None:
     a = cache_dir_for(tmp_path / "project_a")
     b = cache_dir_for(tmp_path / "project_b")
     assert a != b
-    assert a.parent.name == "dbt-debt-cache"
+    assert a.parent.name == "dbt-debt"
+
+
+def test_cache_root_honors_xdg_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert cache_root() == tmp_path / "xdg" / "dbt-debt"
+    monkeypatch.delenv("XDG_CACHE_HOME")
+    assert cache_root() == Path.home() / ".cache" / "dbt-debt"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_cache_dir_and_entries_are_owner_only(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "root" / "project"
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
+    CachingWarehouseClient(inner, cache_dir=cache_dir, ttl=_DAY, key_parts=_KEY).table_usage()
+
+    assert cache_dir.stat().st_mode & 0o777 == 0o700
+    assert cache_dir.parent.stat().st_mode & 0o777 == 0o700
+    files = list(cache_dir.glob("*.json"))
+    assert files and all(f.stat().st_mode & 0o777 == 0o600 for f in files)
+
+
+def test_writes_leave_no_temp_files_and_prune_removes_stale_ones(tmp_path: Path) -> None:
+    inner = FakeWarehouseClient(usage=[UsageRow("a.b.c", 3)])
+    _client(inner, tmp_path).table_usage()
+    assert not list(tmp_path.glob("*.tmp"))
+
+    stale = tmp_path / "leftover.json.123.tmp"
+    stale.write_text("partial")
+    _client(FakeWarehouseClient(), tmp_path)
+    assert not stale.exists()
 
 
 def test_scan_clear_cache_clears_the_project_dir_before_scanning(tmp_path: Path) -> None:
@@ -201,7 +233,7 @@ def test_bare_clear_cache_wipes_everything_and_exits_zero(
 ) -> None:
     from dbt_debt import cli
 
-    root = tmp_path / "dbt-debt-cache"
+    root = tmp_path / "dbt-debt"
     (root / "proj_a").mkdir(parents=True)
     (root / "proj_a" / "x.json").write_text("{}")
     monkeypatch.setattr("dbt_debt.consumption.cache.cache_root", lambda: root)

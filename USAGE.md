@@ -296,7 +296,8 @@ interrupted with Ctrl-C.
 ## ⚡ Making repeat runs fast (the cache)
 
 The slow part of a scan is talking to the warehouse, so the first scan saves its results to a
-small file in your temp folder. Scan again soon after and it reads that file instead of
+small file in your personal cache folder (`~/.cache/dbt-debt`, or under `$XDG_CACHE_HOME` if
+you set it), readable only by you. Scan again soon after and it reads that file instead of
 re-querying. Results are keyed by warehouse and query parameters, so different warehouses'
 scans never collide.
 
@@ -304,14 +305,12 @@ Saved results count as fresh for 1 hour; after that the next scan refetches and 
 Change the window with `--cache-ttl <hours>`, or skip saved results with `--no-cache` for the
 latest numbers.
 
-The 1-hour limit only decides when results are too old to trust; the file itself stays in your
-temp folder until something removes it:
+The 1-hour limit only decides when results are too old to trust; the file itself stays in the
+cache folder until something removes it:
 
 - `dbt-debt --clear-cache` deletes all of dbt-debt's saved results and does nothing else;
 - `dbt-debt scan --clear-cache` deletes this project's results, then runs a fresh scan;
-- the next scan replaces results over an hour old;
-- or your OS clears its temp folder, which is slow and unpredictable (Windows may never do it), so
-  don't count on it.
+- the next scan replaces results over an hour old.
 
 For a clean slate, run `dbt-debt --clear-cache`.
 

@@ -49,6 +49,16 @@ def _plural(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
+# Delete C0 controls (except newline), DEL, and C1 controls from the finished report. Names
+# and file paths arrive verbatim from the manifest and the warehouse, so a crafted value could
+# otherwise inject terminal escape sequences that spoof what the report shows.
+_CONTROL_TABLE = {code: None for code in [*range(0x20), *range(0x7F, 0xA0)] if code != 0x0A}
+
+
+def _strip_controls(text: str) -> str:
+    return text.translate(_CONTROL_TABLE)
+
+
 _BLOCKED_LEGEND = (
     "  (blocked = unused but still backed by a test, enforced contract, or semantic model; "
     "review before removing)"
@@ -214,7 +224,7 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
     if detail:
         lines += _detail_section(scorecard)
 
-    return "\n".join(lines)
+    return _strip_controls("\n".join(lines))
 
 
 def _detail_section(scorecard: Scorecard) -> list[str]:
@@ -450,10 +460,10 @@ def render_orphans_text(scorecard: Scorecard) -> str:
     orphans = scorecard.orphans
     if orphans is None:
         lines.append("Orphan analysis did not run (no dbt-managed datasets).")
-        return "\n".join(lines)
+        return _strip_controls("\n".join(lines))
     lines += _orphan_summary_lines(orphans)
     lines += _detail_orphans(orphans)
-    return "\n".join(lines)
+    return _strip_controls("\n".join(lines))
 
 
 def _detail_columns(dead_columns: tuple[DeadColumn, ...]) -> list[str]:

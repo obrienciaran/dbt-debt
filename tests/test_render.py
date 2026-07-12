@@ -566,6 +566,26 @@ def test_render_orphans_focused_text_and_json() -> None:
     assert data["orphans"]["undeclared_sources"] == ["p.raw.events"]
 
 
+def test_render_text_strips_terminal_control_sequences() -> None:
+    # Names and file paths come verbatim from the manifest; embedded escape sequences must not
+    # reach the terminal, where they could recolour or overwrite report lines.
+    card = Scorecard(
+        project_name="jaffle\x9bshop",
+        lookback_days=180,
+        active_models=0,
+        unused_models=1,
+        dead_models=(DeadModel("model.x.fct", "fct\x1b[31m", "p.d.fct", 2048, "models/fct\r.sql"),),
+        reclaimable_bytes=2048,
+        orphans=OrphanReport(
+            orphaned_relations=(OrphanedRelation("p.d.tmp\x1b[2Kold", "BASE TABLE"),),
+            orphans_checked=True,
+        ),
+    )
+    for out in (render_text(card), render_text(card, detail=True), render_orphans_text(card)):
+        assert "\x1b" not in out and "\r" not in out and "\x9b" not in out
+    assert "fct[31m" in render_text(card)
+
+
 def test_render_json_includes_orphans_section() -> None:
     data = json.loads(render_json(_orphan_card()))
     assert data["orphans"]["orphans_checked"] is True

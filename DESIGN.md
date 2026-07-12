@@ -532,18 +532,27 @@ answer (warehouse, project, region, lookback window, and which queries count as 
 deliberately never by your dbt project. The permission preflight is never cached, because
 permissions can change and that check is load-bearing.
 
+The cache lives in the user's own cache directory (`$XDG_CACHE_HOME/dbt-debt`, or
+`~/.cache/dbt-debt` when the variable is unset), never in a shared location like `/tmp`. The
+files hold warehouse metadata (table names, usage counts, sizes), so the directories are
+created owner-only (0700) and each entry is written atomically to a 0600 file via a private
+temp file and a rename, which also stops another local user pre-planting files or symlinks at
+the predictable paths. For the same reason, the finished text report strips terminal control
+bytes before printing, so a crafted model name or file path in `manifest.json` cannot inject
+escape sequences that recolour or overwrite report lines.
+
 Each saved file carries its creation time **and the time-to-keep it was written under**.
 `--cache-ttl` is not a setting stored anywhere; it persists across sessions only because every
-entry records its own lifetime (`created` + `ttl_hours` inside the JSON file, which lives in
-the OS temp directory and so outlives the terminal session). A later flag-less run judges each
+entry records its own lifetime (`created` + `ttl_hours` inside the JSON file, which lives on
+disk and so outlives the terminal session). A later flag-less run judges each
 entry against the entry's own TTL; passing `--cache-ttl` explicitly overrides the stored values
 for that run, in both directions (it can extend or force-shorten). Because the TTL lives in the
 entries, clearing the cache also clears the remembered TTL; the next scan writes fresh entries
 at the default (1 hour) unless the flag is passed again.
 
 Past its time-to-keep an entry counts as a miss, and expired files are swept at the start of
-the next scan by our own code, so cleanup behaves the same on every OS (Windows never clears
-its temp folder on reboot). Clearing by hand has two forms. `dbt-debt --clear-cache` deletes
+the next scan by our own code, so cleanup behaves the same on every OS and nothing else has to
+clean the cache directory. Clearing by hand has two forms. `dbt-debt --clear-cache` deletes
 the whole cache folder and stops; `dbt-debt scan --clear-cache` clears this project's results
 and then scans fresh. `--no-cache` skips the cache entirely; it neither reads nor writes.
 

@@ -15,16 +15,21 @@ construction. Storing the TTL per entry is what makes `--cache-ttl 2` outlive th
 passed it, so a later flag-less run honors each entry's own lifetime rather than re-judging it
 against the default. An explicit `--cache-ttl` on the current run overrides the stored values
 (`honor_entry_ttl=False`), in both directions. The TTL prune is the guaranteed, cross-platform
-teardown, important because Windows does not clear its temp directory on reboot the way Unix
-clears `/tmp`. The cache therefore cannot persist forever.
+teardown: nothing else ever cleans the per-user cache directory, so the cache cannot persist
+forever.
+
+The cache holds warehouse metadata (relation names, usage counts, sizes), so it lives in the
+per-user cache directory with owner-only permissions and entries are written atomically to
+0600 files. It must never sit in a shared location like `/tmp`, where other local users could
+read it or pre-plant files.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
-import tempfile
 from collections.abc import Callable, Mapping, Set
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
@@ -34,19 +39,21 @@ from typing import Any, TypeVar
 from dbt_debt.consumption.client import WarehouseClient
 from dbt_debt.domain import TableHygiene, TableStorage, UsageRow, WarehouseRelation
 
-CACHE_ROOT_NAME = "dbt-debt-cache"
+CACHE_ROOT_NAME = "dbt-debt"
 
 _T = TypeVar("_T")
 
 
 def cache_root() -> Path:
-    """The directory holding every project's cache, under the OS temp dir.
+    """The directory holding every project's cache, under the user's cache directory.
 
-    `tempfile.gettempdir()` resolves correctly on every OS (`/tmp`, `$TMPDIR`, or `%TEMP%`). The
-    bare `dbt-debt --clear-cache` removes this whole directory.
+    `$XDG_CACHE_HOME` when set, else `~/.cache`, both private to the user. The bare
+    `dbt-debt --clear-cache` removes this whole directory.
     """
 
-    return Path(tempfile.gettempdir()) / CACHE_ROOT_NAME
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return base / CACHE_ROOT_NAME
 
 
 def cache_dir_for(project_dir: Path) -> Path:
@@ -159,6 +166,10 @@ class CachingWarehouseClient:
         self._disabled = False
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
+            # chmod rather than mkdir(mode=...) so pre-existing directories are tightened too;
+            # the cache holds warehouse metadata and must stay owner-only.
+            self._dir.parent.chmod(0o700)
+            self._dir.chmod(0o700)
             self._prune()
         except OSError as exc:
             self._warn_disabled(exc)
@@ -295,12 +306,26 @@ class CachingWarehouseClient:
         return data
 
     def _write(self, path: Path, data: object) -> None:
+        """Write the entry atomically to a 0600 file.
+
+        Writing a private temp file and renaming it over the target keeps the entry owner-only,
+        makes concurrent scans safe, and replaces (never follows) anything already at the path.
+        """
+
         entry = {
             "created": datetime.now(timezone.utc).isoformat(),
             "ttl_hours": self._ttl / timedelta(hours=1),
             "data": data,
         }
-        path.write_text(json.dumps(entry))
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(json.dumps(entry))
+            os.replace(tmp, path)
+        finally:
+            with suppress(OSError):
+                tmp.unlink(missing_ok=True)
 
     def _prune(self) -> None:
         """Delete every expired or corrupt entry in the cache directory, bounding cache growth."""
@@ -310,3 +335,5 @@ class CachingWarehouseClient:
             entry = self._load_entry(path)
             if entry is None or now - entry[0] > self._effective_ttl(entry[1]):
                 path.unlink(missing_ok=True)
+        for path in self._dir.glob("*.tmp"):
+            path.unlink(missing_ok=True)

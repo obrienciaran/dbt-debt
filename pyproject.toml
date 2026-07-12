@@ -9,10 +9,29 @@ description = "A technical-debt scorecard for dbt projects on BigQuery, Snowflak
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
+authors = [{ name = "Ciaran O'Brien" }]
+keywords = ["dbt", "bigquery", "snowflake", "redshift", "technical-debt", "data-engineering", "analytics-engineering"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Topic :: Software Development :: Quality Assurance",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "google-cloud-bigquery>=3.0",
     "sqlglot>=23.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/obrienciaran/dbt-debt"
+Repository = "https://github.com/obrienciaran/dbt-debt"
+Issues = "https://github.com/obrienciaran/dbt-debt/issues"
 
 [project.optional-dependencies]
 snowflake = ["snowflake-connector-python>=3.0"]

@@ -23,6 +23,7 @@ from dbt_debt.artifacts.graph import Graph
 from dbt_debt.artifacts.manifest import load_manifest
 from dbt_debt.config import DEFAULT_QUERY_COMMENT_PATTERN, SUPPORTED_WAREHOUSES, Config
 from dbt_debt.consumption.client import (
+    InvalidIdentifierError,
     MissingPermissionError,
     WarehouseClient,
     WarehouseError,
@@ -250,7 +251,7 @@ def _existing_relations(
         return None
     try:
         existing = client.existing_relations(datasets)
-    except MissingPermissionError as exc:
+    except (MissingPermissionError, InvalidIdentifierError) as exc:
         print(str(exc), file=sys.stderr)
         return None
 
@@ -282,7 +283,7 @@ def _source_last_modified(
         return None
     try:
         return client.source_last_modified(datasets)
-    except MissingPermissionError as exc:
+    except (MissingPermissionError, InvalidIdentifierError) as exc:
         print(str(exc), file=sys.stderr)
         return None
 

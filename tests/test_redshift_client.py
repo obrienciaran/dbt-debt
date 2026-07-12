@@ -13,6 +13,7 @@ import pytest
 
 from dbt_debt.config import Config
 from dbt_debt.consumption.client import (
+    InvalidIdentifierError,
     MissingPermissionError,
     WarehouseClient,
 )
@@ -55,6 +56,13 @@ def test_existing_relations_without_a_database_steps_aside() -> None:
     # metadata grant (skipped with a message), never crash the scan.
     with pytest.raises(MissingPermissionError, match="--project"):
         _bare_client(None).existing_relations({"marts"})
+
+
+def test_existing_relations_rejects_a_malformed_schema_name() -> None:
+    # A schema name failing the builder's injection guard must degrade like a missing grant
+    # (the CLI warns and skips orphan discovery), never escape as a ValueError traceback.
+    with pytest.raises(InvalidIdentifierError, match="orphaned-relation discovery is skipped"):
+        _bare_client("dev").existing_relations({"bad-schema"})
 
 
 def test_naive_datetimes_are_stamped_utc() -> None:

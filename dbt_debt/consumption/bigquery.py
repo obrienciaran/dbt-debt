@@ -14,6 +14,7 @@ from typing import Any
 from dbt_debt.config import Config
 from dbt_debt.consumption import jobs
 from dbt_debt.consumption.client import (
+    InvalidIdentifierError,
     MissingCredentialsError,
     MissingPermissionError,
     WarehouseError,
@@ -80,7 +81,13 @@ class RealBigQueryClient:
             return []
         from google.api_core.exceptions import Forbidden
 
-        sql = jobs.existing_relations_query(self._bq.project, datasets)
+        try:
+            sql = jobs.existing_relations_query(self._bq.project, datasets)
+        except ValueError as exc:
+            raise InvalidIdentifierError(
+                "A managed dataset name in the manifest is not a valid BigQuery identifier, so "
+                f"orphaned-relation discovery is skipped; undeclared sources are still reported. ({exc})"
+            ) from exc
         try:
             rows = self._run(sql, "warehouse table listing")
         except Forbidden as exc:
@@ -108,7 +115,13 @@ class RealBigQueryClient:
             return {}
         from google.api_core.exceptions import Forbidden
 
-        sql = jobs.source_last_modified_query(datasets)
+        try:
+            sql = jobs.source_last_modified_query(datasets)
+        except ValueError as exc:
+            raise InvalidIdentifierError(
+                "A declared source's dataset name in the manifest is not a valid BigQuery "
+                f"identifier, so the stale-source check is skipped; the rest of the scan is unaffected. ({exc})"
+            ) from exc
         try:
             rows = self._run(sql, "source freshness")
         except Forbidden as exc:

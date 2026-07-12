@@ -22,6 +22,7 @@ from typing import Any, cast
 from dbt_debt.config import Config
 from dbt_debt.consumption import jobs, redshift_queries
 from dbt_debt.consumption.client import (
+    InvalidIdentifierError,
     MissingCredentialsError,
     MissingPermissionError,
     WarehouseError,
@@ -123,7 +124,14 @@ class RealRedshiftClient:
                 "models. Pass --project with the database name; orphaned-relation discovery is "
                 "skipped, undeclared sources are still reported."
             )
-        sql = redshift_queries.existing_relations_query(self._database, datasets)
+        try:
+            sql = redshift_queries.existing_relations_query(self._database, datasets)
+        except ValueError as exc:
+            raise InvalidIdentifierError(
+                "A managed schema name in the manifest is not a valid Redshift identifier, so "
+                f"orphaned-relation discovery is skipped; undeclared sources are still "
+                f"reported. ({exc})"
+            ) from exc
         try:
             rows = self._run(sql, "warehouse table listing")
         except _programming_error() as exc:

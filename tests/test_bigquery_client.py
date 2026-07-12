@@ -14,6 +14,7 @@ from google.api_core.exceptions import Forbidden
 from dbt_debt.config import Config
 from dbt_debt.consumption.bigquery import RealBigQueryClient
 from dbt_debt.consumption.client import (
+    InvalidIdentifierError,
     MissingCredentialsError,
     MissingPermissionError,
     WarehouseError,
@@ -53,6 +54,18 @@ def test_existing_relations_raises_without_tables_list() -> None:
     # A Forbidden listing surfaces as MissingPermissionError so the caller can warn and skip.
     with pytest.raises(MissingPermissionError):
         _client_with(_ForbiddenQueryBQ()).existing_relations({"jaffle_shop"})
+
+
+def test_existing_relations_rejects_a_malformed_dataset_name() -> None:
+    # A dataset name failing the builder's injection guard must degrade like a missing grant
+    # (the CLI warns and skips orphan discovery), never escape as a ValueError traceback.
+    with pytest.raises(InvalidIdentifierError, match="orphaned-relation discovery is skipped"):
+        _client_with(_ForbiddenQueryBQ()).existing_relations({"bad schema"})
+
+
+def test_source_last_modified_rejects_a_malformed_dataset_name() -> None:
+    with pytest.raises(InvalidIdentifierError, match="stale-source check is skipped"):
+        _client_with(_ForbiddenQueryBQ()).source_last_modified({"proj.bad schema"})
 
 
 class _BadRequestBQ:

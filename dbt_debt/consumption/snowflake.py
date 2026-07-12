@@ -19,6 +19,7 @@ from typing import Any, cast
 from dbt_debt.config import Config
 from dbt_debt.consumption import jobs, snowflake_queries
 from dbt_debt.consumption.client import (
+    InvalidIdentifierError,
     MissingCredentialsError,
     MissingPermissionError,
     WarehouseError,
@@ -98,7 +99,14 @@ class RealSnowflakeClient:
                 "models. Pass --project with the database name; orphaned-relation discovery is "
                 "skipped, undeclared sources are still reported from the manifest."
             )
-        sql = snowflake_queries.existing_relations_query(self._database, datasets)
+        try:
+            sql = snowflake_queries.existing_relations_query(self._database, datasets)
+        except ValueError as exc:
+            raise InvalidIdentifierError(
+                "A managed schema name in the manifest is not a valid Snowflake identifier, so "
+                f"orphaned-relation discovery is skipped; undeclared sources are still "
+                f"reported. ({exc})"
+            ) from exc
         try:
             rows = self._run(sql, "warehouse table listing")
         except _programming_error() as exc:
@@ -122,7 +130,14 @@ class RealSnowflakeClient:
     def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
         if not datasets:
             return {}
-        sql = snowflake_queries.source_last_modified_query(datasets)
+        try:
+            sql = snowflake_queries.source_last_modified_query(datasets)
+        except ValueError as exc:
+            raise InvalidIdentifierError(
+                "A declared source's schema name in the manifest is not a valid Snowflake "
+                f"identifier, so the stale-source check is skipped; the rest of the scan is "
+                f"unaffected. ({exc})"
+            ) from exc
         return jobs.parse_last_modified_rows(self._run_wrapped(sql, "source freshness"))
 
     def _run_wrapped(self, sql: str, stage: str) -> list[dict[str, Any]]:

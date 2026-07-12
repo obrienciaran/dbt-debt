@@ -41,6 +41,18 @@ class MissingPermissionError(WarehouseError):
     """
 
 
+class InvalidIdentifierError(WarehouseError):
+    """Raised when a manifest identifier cannot be safely placed in a metadata query.
+
+    The orphan and stale-source builders reject a dataset, schema, or database name that is
+    not a valid warehouse identifier (the injection guard). A client translates that rejection
+    into this error so the CLI degrades the optional check with a message, the same as a
+    missing grant, rather than letting the builder's `ValueError` escape as a traceback. It is
+    a `WarehouseError`, so the top-level handler is a safe net if a caller ever forgets to
+    degrade.
+    """
+
+
 @runtime_checkable
 class WarehouseClient(Protocol):
     """What the engine needs from the warehouse, narrowed to parsed results."""

@@ -155,13 +155,21 @@ that history".
 
 ## 📦 Installing it
 
-Not on PyPI yet, so install from a copy of this repo (needs Python 3.10+):
+From [PyPI](https://pypi.org/project/dbt-debt/) (needs Python 3.10+):
 
 ```
-git clone <this repo>
-cd dbt-debt
-pip install .
+pip install dbt-debt
 ```
+
+or with uv, as a project dependency (`uv add dbt-debt`), a standalone tool
+(`uv tool install dbt-debt`), or run it without installing:
+
+```
+uvx dbt-debt scan
+```
+
+BigQuery support is built in. For Snowflake or Redshift, add the extra:
+`pip install "dbt-debt[snowflake]"` or `pip install "dbt-debt[redshift]"`.
 
 (For the Snowflake and Redshift install extras, connection setup, and permissions, see [`USAGE.md`](USAGE.md).)
 

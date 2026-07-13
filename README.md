@@ -15,7 +15,8 @@ provided you have the right warehouse permissions.
 
 👉 dbt-debt only reports. It never edits or deletes anything.
 
-https://github.com/user-attachments/assets/850ba77f-61c8-446e-bf5c-cc49f0225391
+https://github.com/user-attachments/assets/88289c49-6358-46fd-b567-ebe97a653054
+
 
 ```
 Models:

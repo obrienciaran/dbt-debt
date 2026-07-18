@@ -208,6 +208,6 @@ options, and how to work on dbt-debt, see [`USAGE.md`](USAGE.md).
 ## 🔧 Notes
 
 - Built using Claude Fable 5 and ten years of experience as a data professional in medium to large enterprises.
-- Security audited using Cloudflare's [`security audit skill`](https://github.com/cloudflare/security-audit-skill).
+- Secure, read only tool. No login. No passwords. Security also audited using Cloudflare's [`security audit skill`](https://github.com/cloudflare/security-audit-skill).
 - dbt-debt is an independent project and is not affiliated with dbt Labs, Snowflake, Google Cloud, or Amazon Web Services.
 - If you love this project, please consider giving it a ⭐.

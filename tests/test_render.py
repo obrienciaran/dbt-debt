@@ -205,10 +205,10 @@ def test_render_text_lists_missing_first_seen_nodes_separately() -> None:
         ),
     )
     text = render_text(card, detail=True)
-    assert "? 1 missing a first-seen date (likely new tables; not counted in 'unused')" in text
-    assert "Missing a first-seen date, likely new tables (1):" in text
+    assert "? 1 missing a first-seen date (age cannot be proven; not counted in 'unused')" in text
+    assert "Missing a first-seen date; age unproven (1):" in text
     assert "  - just_built  models/jb.sql" in text
-    assert "ACCOUNT_USAGE.TABLES lags ~90 minutes" in text
+    assert "set aside conservatively" in text
     # The unused list stays clean of it.
     assert "Unused models (1):" in text
 

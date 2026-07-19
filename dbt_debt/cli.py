@@ -82,18 +82,21 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
         existing = _existing_relations(client, manifest)
     orphan_report = build_orphan_report(manifest, existing, references, usage)
     first_seen: dict[str, datetime] = {}
-    if config.min_age_days > 0:
+    # Databricks always needs retained-lineage first-seen evidence: even when the caller
+    # disables the recent-age threshold, a relation with no lineage date must be set aside.
+    if config.min_age_days > 0 or config.warehouse == "databricks":
         with status("Checking relation ages"):
             first_seen = client.relation_first_seen()
     last_modified: dict[str, datetime] | None = None
     if config.stale_source_days > 0 and manifest.relations:
-        if config.warehouse == "redshift":
-            # Redshift exposes no last-data-received metadata (no `last_altered` or
-            # `__TABLES__` analogue), so staleness cannot be read, only guessed, which the
-            # check never does.
+        if config.warehouse in ("redshift", "databricks"):
+            reason = (
+                "exposes no safe table last-modified metadata"
+                if config.warehouse == "redshift"
+                else "source freshness is deferred until safe semantics are validated"
+            )
             print(
-                "Redshift exposes no table last-modified metadata; the stale-source check is "
-                "skipped.",
+                f"{config.warehouse.capitalize()} {reason}; the stale-source check is skipped.",
                 file=sys.stderr,
             )
         else:
@@ -153,8 +156,9 @@ def _infer_database(manifest: Manifest) -> str | None:
 
     On BigQuery this is the GCP project: `INFORMATION_SCHEMA.JOBS` is project-scoped, so the
     scan must run where the relations (and their queries) live. On Snowflake it names the
-    database whose `INFORMATION_SCHEMA.TABLES` the orphan scan reads. Either way this lets the
-    tool target the right database without a flag, the way dbt itself does.
+    database whose `INFORMATION_SCHEMA.TABLES` the orphan scan reads. On Databricks it is the
+    Unity Catalog catalog used to qualify managed schemas for relation inventory. This lets the
+    tool target the right namespace without a flag, the way dbt itself does.
     """
 
     databases = Counter(m.database for m in manifest.models.values() if m.database)
@@ -198,6 +202,10 @@ def _make_client(config: Config, database: str | None) -> WarehouseClient:
         from dbt_debt.consumption.redshift import RealRedshiftClient
 
         return RealRedshiftClient(config, database=database)
+    if config.warehouse == "databricks":
+        from dbt_debt.consumption.databricks import RealDatabricksClient
+
+        return RealDatabricksClient(config, database=database)
     from dbt_debt.consumption.bigquery import RealBigQueryClient
 
     return RealBigQueryClient(config, project=database)
@@ -217,6 +225,14 @@ def _column_report(
     """
 
     if not config.columns:
+        return None
+    if config.warehouse == "databricks":
+        print(
+            "Databricks column analysis is skipped: complete query-text or column-lineage "
+            "coverage has not been proven, so unused-column verdicts would be unsafe. "
+            "Reporting model-level only.",
+            file=sys.stderr,
+        )
         return None
     if catalog is None:
         print(
@@ -259,9 +275,8 @@ def _existing_relations(
     model_keys = {model.relation_key for model in manifest.models.values()}
     if not visible or (model_keys and model_keys.isdisjoint(visible)):
         print(
-            "Could not read table metadata for the managed datasets (need read access, e.g. "
-            "roles/bigquery.metadataViewer or dataViewer); skipping orphaned-relation discovery. "
-            "Undeclared sources are still reported.",
+            "Could not read table metadata for the managed datasets; skipping "
+            "orphaned-relation discovery. Undeclared sources are still reported.",
             file=sys.stderr,
         )
         return None
@@ -378,6 +393,14 @@ def _run_scan(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if config.warehouse == "databricks":
+        from dbt_debt.consumption.databricks_queries import exclusion_clause
+
+        try:
+            exclusion_clause(config.query_comment_pattern)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     if args.region and config.warehouse != "bigquery":
         print(
             f"--region only applies to BigQuery; ignoring for {config.warehouse}.", file=sys.stderr
@@ -443,12 +466,19 @@ def _wrap_cache(client: WarehouseClient, config: Config, project: str | None) ->
         if config.cache_ttl_hours is not None
         else Config.DEFAULT_CACHE_TTL_HOURS
     )
+    endpoint = ""
+    if config.warehouse == "redshift":
+        endpoint = os.environ.get("REDSHIFT_HOST", "")
+    elif config.warehouse == "databricks":
+        from dbt_debt.consumption.databricks import endpoint_identity
+
+        endpoint = endpoint_identity()
     key_parts = {
         "warehouse": config.warehouse,
         "connection": config.connection or "",
         # Redshift's connection is env-var based, so the endpoint joins the key here: two
         # workgroups sharing a database name must never serve each other's cached rows.
-        "endpoint": os.environ.get("REDSHIFT_HOST", "") if config.warehouse == "redshift" else "",
+        "endpoint": endpoint,
         "project": project or "",
         "region": config.region,
         "lookback_days": str(config.lookback_days),
@@ -483,8 +513,8 @@ def _should_view(config: Config, args: argparse.Namespace) -> bool:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dbt-debt",
-        description="A technical-debt scorecard for dbt projects on BigQuery, Snowflake, and "
-        "Redshift.",
+        description="A technical-debt scorecard for dbt projects on BigQuery, Snowflake, "
+        "Redshift, and Databricks.",
     )
     # A distinct dest from scan's own --clear-cache: argparse lets a subparser's defaults
     # overwrite values the top-level parser already set, so sharing one dest would make
@@ -513,7 +543,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--project",
         default=None,
         help="Warehouse database to query — the GCP project on BigQuery, the database on "
-        "Snowflake and Redshift (default: inferred from the models' database).",
+        "Snowflake and Redshift, or the catalog on Databricks (default: inferred).",
     )
     scan.add_argument(
         "--region", default=None, help="BigQuery region for INFORMATION_SCHEMA (default: US)."

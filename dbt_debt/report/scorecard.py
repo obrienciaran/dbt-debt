@@ -358,13 +358,12 @@ def build_scorecard(
     `first_seen` (relation_key -> earliest job) drives the too-new guard: an unqueried node
     younger than `config.min_age_days` is set aside as "too new to judge" and excluded from
     every unused-derived figure: the count, the removable tests, the exposure and semantic
-    impact, and the reclaimable bytes. On Snowflake an unqueried node with no first-seen date
-    at all is set aside the same way (as "missing a first-seen date, likely a new table"), since
-    ACCOUNT_USAGE.TABLES lags behind reality. Queried nodes with at most `config.rare_threshold`
-    queries land in the separate rarely-used review band, which feeds none of those figures
-    either. `table_storage` (Snowflake only) adds the time-travel/fail-safe breakdown to the
-    dead-asset lists; the totals and ranking come from `storage_bytes` as ever. `table_hygiene`
-    (Redshift only) feeds the table-hygiene review check. `now` is injectable for tests.
+    impact, and the reclaimable bytes. Snowflake and Databricks set aside unqueried nodes with no
+    first-seen date because their age cannot be proven safely. Queried nodes with at most
+    `config.rare_threshold` queries land in the separate rarely-used review band, which feeds
+    none of those figures either. `table_storage` (Snowflake only) adds the time-travel/fail-safe
+    breakdown to the dead-asset lists; the totals and ranking come from `storage_bytes` as ever.
+    `table_hygiene` (Redshift only) feeds the table-hygiene review check. `now` is injectable.
     """
 
     usage_rows = list(usage_rows)
@@ -375,12 +374,13 @@ def build_scorecard(
     min_age = timedelta(days=config.min_age_days)
     too_new = too_new_models(unqueried, first_seen_ids, now_utc, min_age)
 
-    # On Snowflake, first-seen comes from ACCOUNT_USAGE.TABLES, which lags (~90 minutes): a
-    # dead node with no row yet cannot prove its age, so it is set aside as a likely new table
-    # rather than judged. On BigQuery a missing first-seen means zero jobs all window (the
-    # strongest unused signal), so those are judged normally.
+    # Snowflake's lagging TABLES metadata and Databricks' retained lineage cannot prove the age
+    # of a relation with no row. Databricks always sets such nodes aside: --min-age-days=0 may
+    # disable the recent-age guard, but it must not turn unknown age into an unused verdict.
     missing: set[str] = set()
-    if config.warehouse == "snowflake" and min_age > timedelta(0):
+    if config.warehouse == "databricks" or (
+        config.warehouse == "snowflake" and min_age > timedelta(0)
+    ):
         missing = missing_first_seen_models(unqueried, first_seen_ids)
     dead = unqueried - too_new - missing
 
@@ -389,7 +389,9 @@ def build_scorecard(
     usage_by_model = model_usage(manifest, usage_rows)
     rare = rarely_used_models(usage_by_model, config.rare_threshold)
     rare -= too_new_models(rare, first_seen_ids, now_utc, min_age)
-    if config.warehouse == "snowflake" and min_age > timedelta(0):
+    if config.warehouse == "databricks" or (
+        config.warehouse == "snowflake" and min_age > timedelta(0)
+    ):
         rare -= missing_first_seen_models(rare, first_seen_ids)
 
     # When the column stage ran, tests guarding a dead column are removable too: rebuild the

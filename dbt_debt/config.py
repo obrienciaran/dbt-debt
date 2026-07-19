@@ -18,9 +18,14 @@ Matching that, rather than the statement type, excludes dbt-issued `SELECT`s (it
 which the statement-type filter alone would keep. Configurable for non-default comments.
 """
 
-SUPPORTED_WAREHOUSES = ("bigquery", "snowflake", "redshift")
+SUPPORTED_WAREHOUSES = ("bigquery", "snowflake", "redshift", "databricks")
 
-WAREHOUSE_DIALECTS = {"bigquery": "bigquery", "snowflake": "snowflake", "redshift": "redshift"}
+WAREHOUSE_DIALECTS = {
+    "bigquery": "bigquery",
+    "snowflake": "snowflake",
+    "redshift": "redshift",
+    "databricks": "databricks",
+}
 """The sqlglot dialect every SQL parse uses, keyed by warehouse."""
 
 

@@ -29,6 +29,22 @@ from dbt_debt.verdict.redshift_hygiene import (
     UNSORTED_THRESHOLD,
 )
 
+_MISSING_FIRST_SEEN_SECTION: dict[str, str] = {
+    "snowflake": "Missing a first-seen date, likely new tables",
+    "databricks": "Missing a first-seen date; age unproven",
+}
+
+_MISSING_FIRST_SEEN_HINTS: dict[str, str] = {
+    "snowflake": (
+        "Snowflake's ACCOUNT_USAGE.TABLES lags ~90 minutes behind reality; "
+        "re-scan later to judge these"
+    ),
+    "databricks": (
+        "first-seen comes from retained lineage, which may be absent after the 365-day "
+        "retention window or when dbt rebuilds a table; re-scan if lineage appears later"
+    ),
+}
+
 _UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
 
@@ -250,12 +266,21 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
     if scorecard.missing_first_seen:
         lines += [
             "",
-            f"Missing a first-seen date; age unproven ({len(scorecard.missing_first_seen)}):",
+            (
+                f"{_MISSING_FIRST_SEEN_SECTION.get(scorecard.warehouse, 'Missing a first-seen date; age unproven')} "
+                f"({len(scorecard.missing_first_seen)}):"
+            ),
         ]
         for model in scorecard.missing_first_seen:
             path = f"  {model.file_path}" if model.file_path else ""
             lines.append(f"  - {model.name}{_kind_tag(model)}{path}")
-        lines.append("  (set aside conservatively; re-scan when first-seen metadata is available)")
+        hint = _MISSING_FIRST_SEEN_HINTS.get(scorecard.warehouse)
+        if hint:
+            lines.append(f"  ({hint})")
+        else:
+            lines.append(
+                "  (set aside conservatively; re-scan when first-seen metadata is available)"
+            )
     if scorecard.unpartitioned_tables:
         count = len(scorecard.unpartitioned_tables)
         lines += ["", f"Large tables with neither partition_by nor cluster_by ({count}):"]

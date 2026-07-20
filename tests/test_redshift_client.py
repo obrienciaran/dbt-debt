@@ -71,13 +71,13 @@ def test_naive_datetimes_are_stamped_utc() -> None:
     # raise on a naive one (seen on the first live scan).
     from datetime import datetime, timezone
 
-    from dbt_debt.consumption.redshift import _as_utc
+    from dbt_debt.consumption.jobs import as_utc
 
     naive = datetime(2026, 7, 10, 12, 0, 0)
-    assert _as_utc(naive) == datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
+    assert as_utc(naive) == datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
     aware = datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
-    assert _as_utc(aware) is aware
-    assert _as_utc("not a datetime") == "not a datetime"
+    assert as_utc(aware) is aware
+    assert as_utc("not a datetime") == "not a datetime"
 
 
 def test_source_last_modified_is_always_empty() -> None:

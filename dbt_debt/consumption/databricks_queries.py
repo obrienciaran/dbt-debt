@@ -125,7 +125,11 @@ GROUP BY relation_key
 
 
 def query_text_query(lookback_days: int, exclusion: str) -> str:
-    """Successful non-dbt SELECT text, retained for a future completeness-proven column mode."""
+    """Successful non-dbt SELECT text for a future Databricks ``--columns`` mode.
+
+    Column analysis is disabled until complete query-text or column-lineage coverage is proven
+    across supported compute paths (tracked as a GitHub issue).
+    """
 
     return f"""
 SELECT statement_text AS query

@@ -92,8 +92,9 @@ that history". Databricks lineage and query-history system tables retain a rolli
   query text it could read ("column verdicts based on 96% of query text"), the verdicts rest on
   that share, and the unparsed remainder could contain column reads the scan did not see. Model
   verdicts come from the query log's own metadata and never depend on parsing.
-  Databricks currently skips `--columns`: complete query-text or column-lineage coverage has not
-  been proven across supported compute paths, so an unused-column verdict would be unsafe.
+  Databricks currently skips ``--columns``: complete query-text or column-lineage coverage has not
+  been proven across supported compute paths, so an unused-column verdict would be unsafe
+  (tracked as a GitHub issue).
 - **columns you could remove.** Unused columns nothing in the project still depends on (no data
   test, no contract). These are suggestions, not an automatic delete, since "unused" comes from
   the query log, which can't see everything (see *What counts as usage*). An unused column that
@@ -135,7 +136,8 @@ that history". Databricks lineage and query-history system tables retain a rolli
   Snowflake the date also moves on DDL changes (even a table comment), so a stale table can
   occasionally look fresher than its data. Redshift exposes no last-modified metadata at all,
   so the check is skipped there with a note. Databricks source freshness is also deferred and
-  skipped until safe last-data semantics are established.
+  skipped until safe last-data semantics are established (tracked as GitHub issues, along with
+  ``--columns`` and semantic validation for Databricks).
 - **documentation drift.** A column declared in a model's YAML that no longer exists in the
   built table (per `catalog.json`) is stale documentation to delete. Rerun `dbt docs generate`
   first if the catalog is old.

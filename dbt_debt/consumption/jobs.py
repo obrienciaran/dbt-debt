@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from dbt_debt.domain import TableHygiene, TableStorage, UsageRow, WarehouseRelation
@@ -176,6 +176,21 @@ def _split_dataset_key(key: str) -> tuple[str, str]:
     if not _DATASET_RE.match(dataset):
         raise ValueError(f"invalid BigQuery dataset name: {dataset!r}")
     return project, dataset
+
+
+def as_utc(value: Any) -> Any:
+    """Stamp UTC on naive datetimes; everything else passes through.
+
+    Redshift SYS views report timestamps in UTC but as ``timestamp without time zone``, so the
+    driver hands back naive datetimes (confirmed live). Databricks validation returned aware
+    values, but the connector makes no guarantee, so the same normalization is applied
+    defensively. Verdicts compare against aware ``now`` values, so the zone is restored at the
+    client boundary that knows it may have been dropped.
+    """
+
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def parse_query_text_rows(rows: Iterable[Mapping[str, Any]]) -> list[str]:

@@ -259,8 +259,8 @@ The design decisions, and what the live scans showed:
   on Redshift than elsewhere, documented rather than worked around. First-seen still comes
   from the query history, never `SVV_TABLE_INFO.create_time`, which resets on every rebuild.
   A dead node with no first-seen row means no jobs within retention and is judged normally,
-  like BigQuery; the missing-first-seen set-aside stays Snowflake-only (lagging metadata is
-  Snowflake's failure mode, not Redshift's). *Measured 2026-07-11:* `MIN(start_time)` on
+  like BigQuery; the missing-first-seen set-aside is for Snowflake's lagging TABLES metadata
+  and Databricks' retained-lineage gaps, not Redshift's failure mode. *Measured 2026-07-11:* `MIN(start_time)` on
   `SYS_QUERY_HISTORY` still reaches the demo account's first activity (2026-07-10), so the
   account is too young to show a retention floor; re-measure once it is comfortably older
   than the candidate windows (from mid-August 2026).
@@ -475,8 +475,10 @@ Column analysis is disabled because complete query-text or column-lineage covera
 proved across SQL warehouses, serverless compute, and classic compute. Source freshness is
 deferred because no safe last-data timestamp has been established, and this contribution defines
 no Databricks-specific hygiene verdict. These paths skip explicitly rather than manufacture
-negative findings. Storage continues to use the `bytes` statistic in dbt-databricks'
-`catalog.json`.
+negative findings. Live storage metrics are also deferred: ranking uses the ``bytes`` statistic
+from ``catalog.json`` (``dbt docs generate``), as on BigQuery when live
+``INFORMATION_SCHEMA.TABLE_STORAGE`` is unavailable. Snowflake and Redshift overwrite catalog
+sizes on each scan.
 
 ### Live validation results (2026-07-18 to 2026-07-19)
 

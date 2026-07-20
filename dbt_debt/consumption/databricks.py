@@ -118,17 +118,21 @@ class RealDatabricksClient:
             ) from exc
 
     def table_storage(self) -> dict[str, TableStorage]:
-        """No live override: dbt-databricks' catalog.json ``bytes`` value remains authoritative."""
+        """Deferred: live Unity Catalog storage metrics are not queried in v1 (tracked as a GitHub issue).
+
+        Ranking uses the ``bytes`` statistic from ``catalog.json`` (``dbt docs generate``), as on
+        BigQuery when live ``INFORMATION_SCHEMA.TABLE_STORAGE`` is unavailable.
+        """
 
         return {}
 
     def table_hygiene(self) -> dict[str, TableHygiene]:
-        """Deferred: this contribution does not define a Databricks hygiene verdict."""
+        """Deferred: no Databricks table-hygiene verdict is defined in v1 (tracked as a GitHub issue)."""
 
         return {}
 
     def source_last_modified(self, datasets: Set[str]) -> dict[str, datetime]:
-        """Deferred: this contribution does not define Databricks source freshness."""
+        """Deferred: Databricks source freshness is not defined in v1 (tracked as a GitHub issue)."""
 
         del datasets
         return {}
@@ -147,7 +151,7 @@ class RealDatabricksClient:
                 raise
             raise WarehouseError(f"Databricks query for {stage} failed: {exc}") from exc
         return [
-            {column: value for column, value in zip(columns, row, strict=False)}
+            {column: jobs.as_utc(value) for column, value in zip(columns, row, strict=False)}
             for row in rows or []
         ]
 

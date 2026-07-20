@@ -45,6 +45,31 @@ from dbt_debt.report.scorecard import (
 from dbt_debt.report.spinner import status
 from dbt_debt.sqlparse import build_schema
 
+_ORPHAN_INVENTORY_SKIP_MESSAGES: dict[str, str] = {
+    "bigquery": (
+        "Could not read table metadata for the managed datasets (need read access, e.g. "
+        "roles/bigquery.metadataViewer or dataViewer); skipping orphaned-relation discovery. "
+        "Undeclared sources are still reported."
+    ),
+    "databricks": (
+        "Could not read table metadata for the managed schemas (need SELECT on "
+        "system.information_schema.tables for the catalog schemas, or pass --project with the "
+        "catalog name); skipping orphaned-relation discovery. Undeclared sources are still "
+        "reported."
+    ),
+}
+
+_STALE_SOURCE_SKIP_MESSAGES: dict[str, str] = {
+    "redshift": (
+        "Redshift exposes no last-modified metadata (no `last_altered` or `__TABLES__` "
+        "analogue); the stale-source check is skipped."
+    ),
+    "databricks": (
+        "Databricks source freshness is deferred until safe last-data semantics are validated; "
+        "the stale-source check is skipped."
+    ),
+}
+
 
 def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = None) -> Scorecard:
     """Orchestrate a scan: preflight, load artifacts, fetch usage, assemble the scorecard.
@@ -79,7 +104,7 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
         column_report = _column_report(config, client, manifest, catalog, storage)
     references = model_relation_references(manifest, dialect=config.dialect)
     with status("Listing warehouse relations"):
-        existing = _existing_relations(client, manifest)
+        existing = _existing_relations(client, manifest, config.warehouse)
     orphan_report = build_orphan_report(manifest, existing, references, usage)
     first_seen: dict[str, datetime] = {}
     # Databricks always needs retained-lineage first-seen evidence: even when the caller
@@ -89,16 +114,8 @@ def _scan(config: Config, client: WarehouseClient, manifest: Manifest | None = N
             first_seen = client.relation_first_seen()
     last_modified: dict[str, datetime] | None = None
     if config.stale_source_days > 0 and manifest.relations:
-        if config.warehouse in ("redshift", "databricks"):
-            reason = (
-                "exposes no safe table last-modified metadata"
-                if config.warehouse == "redshift"
-                else "source freshness is deferred until safe semantics are validated"
-            )
-            print(
-                f"{config.warehouse.capitalize()} {reason}; the stale-source check is skipped.",
-                file=sys.stderr,
-            )
+        if config.warehouse in _STALE_SOURCE_SKIP_MESSAGES:
+            print(_STALE_SOURCE_SKIP_MESSAGES[config.warehouse], file=sys.stderr)
         else:
             with status("Checking source freshness"):
                 last_modified = _source_last_modified(client, manifest)
@@ -230,7 +247,7 @@ def _column_report(
         print(
             "Databricks column analysis is skipped: complete query-text or column-lineage "
             "coverage has not been proven, so unused-column verdicts would be unsafe. "
-            "Reporting model-level only.",
+            "Reporting model-level only. (Tracked as a GitHub issue.)",
             file=sys.stderr,
         )
         return None
@@ -251,7 +268,7 @@ def _column_report(
 
 
 def _existing_relations(
-    client: WarehouseClient, manifest: Manifest
+    client: WarehouseClient, manifest: Manifest, warehouse: str
 ) -> list[WarehouseRelation] | None:
     """List warehouse relations in dbt-managed datasets, or None when they can't be read.
 
@@ -274,11 +291,12 @@ def _existing_relations(
     visible = {relation.relation_key for relation in existing}
     model_keys = {model.relation_key for model in manifest.models.values()}
     if not visible or (model_keys and model_keys.isdisjoint(visible)):
-        print(
+        message = _ORPHAN_INVENTORY_SKIP_MESSAGES.get(
+            warehouse,
             "Could not read table metadata for the managed datasets; skipping "
             "orphaned-relation discovery. Undeclared sources are still reported.",
-            file=sys.stderr,
         )
+        print(message, file=sys.stderr)
         return None
     return existing
 

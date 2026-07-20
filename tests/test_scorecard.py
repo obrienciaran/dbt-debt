@@ -179,7 +179,8 @@ def test_databricks_dead_node_without_lineage_first_seen_is_always_set_aside() -
 
 def test_redshift_dead_node_without_first_seen_is_judged_unused() -> None:
     # On Redshift a missing first-seen means no jobs within the SYS views' retention — judged
-    # normally like BigQuery; the set-aside exists only for Snowflake's lagging metadata.
+    # normally like BigQuery; the set-aside exists for Snowflake's lagging metadata and
+    # Databricks' retained-lineage gaps.
     manifest = load_manifest(FIXTURE)
     graph = Graph.from_manifest(manifest)
     now = datetime(2026, 7, 1, tzinfo=timezone.utc)

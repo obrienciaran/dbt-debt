@@ -156,14 +156,26 @@ def test_connector_failure_becomes_missing_credentials(monkeypatch: pytest.Monke
 
 def test_rows_are_normalized_for_shared_parsers(monkeypatch: pytest.MonkeyPatch) -> None:
     when = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    naive_when = datetime(2026, 1, 3, 15, 30, 0)
     cursor = _Cursor(
-        rows=[("MAIN.MARTS.MODEL", 2, when, None)],
+        rows=[
+            ("MAIN.MARTS.MODEL", 2, when, None),
+            ("MAIN.MARTS.NAIVE", 1, naive_when, None),
+        ],
         columns=("RELATION_KEY", "QUERY_COUNT", "LAST_QUERIED", "BYTES_SCANNED"),
     )
     _install_connector(monkeypatch, cursor=cursor)
     _configured_env(monkeypatch)
     client = RealDatabricksClient(Config(warehouse="databricks"))
-    assert client.table_usage() == [UsageRow("main.marts.model", 2, when, 0)]
+    assert client.table_usage() == [
+        UsageRow("main.marts.model", 2, when, 0),
+        UsageRow(
+            "main.marts.naive",
+            1,
+            datetime(2026, 1, 3, 15, 30, 0, tzinfo=timezone.utc),
+            0,
+        ),
+    ]
     assert cursor.closed is True
 
 

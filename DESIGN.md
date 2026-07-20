@@ -253,17 +253,19 @@ The design decisions, and what the live scans showed:
   the driver hands back naive datetimes (found live; BigQuery and Snowflake return aware
   ones). The client stamps UTC on them at its boundary, since the verdicts compare against aware
   `now` values.
-- **Retention caps the window.** AWS documents seven days of history for the older STL views
-  and leaves the SYS views' retention unstated. Whatever it is, it bounds both the effective
-  `--lookback-days` and how far back `first_seen` can reach, making "unused" a weaker signal
-  on Redshift than elsewhere, documented rather than worked around. First-seen still comes
-  from the query history, never `SVV_TABLE_INFO.create_time`, which resets on every rebuild.
-  A dead node with no first-seen row means no jobs within retention and is judged normally,
-  like BigQuery; the missing-first-seen set-aside is for Snowflake's lagging TABLES metadata
-  and Databricks' retained-lineage gaps, not Redshift's failure mode. *Measured 2026-07-11:* `MIN(start_time)` on
-  `SYS_QUERY_HISTORY` still reaches the demo account's first activity (2026-07-10), so the
-  account is too young to show a retention floor; re-measure once it is comfortably older
-  than the candidate windows (from mid-August 2026).
+- **Retention caps the window.** AWS guarantees seven days of history in `SYS_QUERY_HISTORY`,
+  which bounds both the effective `--lookback-days` and how far back `first_seen` can reach,
+  making "unused" a weaker signal on Redshift than elsewhere, documented rather than worked
+  around. First-seen still comes from the query history, never `SVV_TABLE_INFO.create_time`,
+  which resets on every rebuild. A dead node with no first-seen row means no jobs within
+  retention and is judged normally, like BigQuery; the missing-first-seen set-aside is for
+  Snowflake's lagging TABLES metadata and Databricks' retained-lineage gaps, not Redshift's
+  failure mode. *Measured 2026-07-20:* the demo account sat idle from 2026-07-11 and lost its
+  history in full, so `MIN(start_time)` reaches back only as far as the running session. A
+  scan of it reports all thirteen models unused, the correct verdict on the evidence left and
+  the sharpest illustration of the cap: the report still prints the requested 180-day window
+  rather than the seven days the warehouse can answer for. Surfacing the effective window is
+  tracked as a GitHub issue.
 - **The dbt exclusion reuses the Snowflake form** (`REGEXP_COUNT(query_text, $$...$$) = 0`);
   Redshift supports both the function and dollar-quoted literals. `query_text` is truncated at
   4000 characters, which is harmless: dbt's query-comment leads the statement, and the

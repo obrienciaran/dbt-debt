@@ -92,9 +92,9 @@ that history". Databricks lineage and query-history system tables retain a rolli
   query text it could read ("column verdicts based on 96% of query text"), the verdicts rest on
   that share, and the unparsed remainder could contain column reads the scan did not see. Model
   verdicts come from the query log's own metadata and never depend on parsing.
-  Databricks currently skips ``--columns``: complete query-text or column-lineage coverage has not
+  Databricks currently skips `--columns`: complete query-text or column-lineage coverage has not
   been proven across supported compute paths, so an unused-column verdict would be unsafe
-  (tracked as a GitHub issue).
+  (tracked as a GitHub issue, which also covers semantic-model columns there).
 - **columns you could remove.** Unused columns nothing in the project still depends on (no data
   test, no contract). These are suggestions, not an automatic delete, since "unused" comes from
   the query log, which can't see everything (see *What counts as usage*). An unused column that
@@ -136,8 +136,7 @@ that history". Databricks lineage and query-history system tables retain a rolli
   Snowflake the date also moves on DDL changes (even a table comment), so a stale table can
   occasionally look fresher than its data. Redshift exposes no last-modified metadata at all,
   so the check is skipped there with a note. Databricks source freshness is also deferred and
-  skipped until safe last-data semantics are established (tracked as GitHub issues, along with
-  ``--columns`` and semantic validation for Databricks).
+  skipped until safe last-data semantics are established (tracked as a GitHub issue).
 - **documentation drift.** A column declared in a model's YAML that no longer exists in the
   built table (per `catalog.json`) is stale documentation to delete. Rerun `dbt docs generate`
   first if the catalog is old.
@@ -149,14 +148,16 @@ that history". Databricks lineage and query-history system tables retain a rolli
   every query that touches it. The offenders (up to 20) are listed with stored size and the
   bytes user queries scanned over the window, most scanned first, so the top entry is the
   partitioning fix that saves the most. BigQuery only as Snowflake micro-partitions
-  automatically, and Redshift manages sort and distribution itself.
+  automatically, and Redshift manages sort and distribution itself. Databricks is deferred while
+  it is settled whether the check suits it at all: dbt-debt reads only `partition_by` and
+  `cluster_by`, so a liquid-clustered table would be flagged wrongly (tracked as a GitHub issue).
 - **large tables needing maintenance (Redshift only).** A table of 1 GB or more whose
   `SVV_TABLE_INFO` row shows a big unsorted region (20%+, needs VACUUM), stale planner
   statistics (`stats_off` 10+, needs ANALYZE), or heavy slice skew (4x+, needs a
   distribution-key review). Listed with stored size and the bytes user queries scanned, most
   scanned first. Automatic vacuum and analyze usually keep this list empty, and an empty list is
-  the healthy state. BigQuery and Snowflake maintain storage layout themselves; no
-  Databricks-specific table-hygiene verdict is defined yet.
+  the healthy state. BigQuery and Snowflake maintain storage layout themselves; Databricks has no
+  table-hygiene verdict yet (tracked as a GitHub issue).
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage
   you'd reclaim; on Snowflake and Redshift the sizes come live from the warehouse (no
   `dbt docs generate` needed), and Snowflake's include the time-travel and fail-safe copies

@@ -4,8 +4,11 @@ On BigQuery both must be declared explicitly in the dbt config (`partition_by` /
 so a big table with neither is usually an oversight that makes every scan of it a full scan.
 Only `table` and `incremental` materializations qualify (views cannot be partitioned), sizes
 come from the catalog-derived bytes map, and a floor keeps small projects from being flagged
-wholesale. Snowflake is skipped entirely by the caller: its micro-partitioning is automatic and
-explicit clustering keys are an optional large-table tuning lever, not debt.
+wholesale. The other warehouses are skipped entirely by the caller. Snowflake's micro-partitioning
+is automatic and its explicit clustering keys are an optional large-table tuning lever, not debt;
+Redshift manages sort and distribution itself; Databricks is deferred, because `partition_by` and
+`cluster_by` are the only clustering configs read here and a Delta table using
+`liquid_clustered_by` would look unclustered.
 
 Flagging is by *stored* bytes (what the catalog records), but ranking puts the tables user
 queries actually scanned the most first (from the usage rows' bytes), falling back to stored

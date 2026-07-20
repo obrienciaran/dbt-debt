@@ -504,7 +504,8 @@ def build_scorecard(
     scanned_by_key = {row.relation_key: row.bytes_scanned for row in usage_rows}
 
     # The partitioning check is BigQuery-specific: Snowflake micro-partitions automatically and
-    # its explicit clustering keys are optional tuning, not debt.
+    # its explicit clustering keys are optional tuning, not debt, Redshift manages sort and
+    # distribution itself, and Databricks is deferred until `liquid_clustered_by` is read.
     unpartitioned: tuple[UnpartitionedTable, ...] = ()
     if config.warehouse == "bigquery":
         unpartitioned = tuple(
@@ -522,8 +523,8 @@ def build_scorecard(
             )
         )
 
-    # The hygiene check is Redshift-specific: BigQuery and Snowflake maintain storage layout
-    # automatically and expose no maintenance columns. The sizes on the entries come from the
+    # The hygiene check is Redshift-specific: BigQuery, Snowflake, and Databricks maintain storage
+    # layout automatically and expose no maintenance columns. The sizes on the entries come from the
     # hygiene rows themselves: warehouse truth, present even without a catalog.
     hygiene_by_key = dict(table_hygiene or {})
     unhealthy: tuple[UnhealthyTable, ...] = ()

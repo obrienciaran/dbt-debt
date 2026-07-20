@@ -324,7 +324,9 @@ inventory is separately optional and reads `system.information_schema.tables`.
   a GitHub issue. Complete query-text or column-lineage coverage is not proved across SQL
   warehouses, serverless compute, and classic compute; no safe last-data timestamp is
   established; and there is no Databricks-specific hygiene verdict. These paths skip explicitly
-  rather than manufacture negative findings. Sizes and ranking use the `bytes` statistic from
+  rather than manufacture negative findings. Semantic-layer consumers are found from the manifest
+  and work here like anywhere else; only the column refs a semantic model names ride on the
+  disabled column path, so they are covered by the column issue. Sizes and ranking use the `bytes` statistic from
   `catalog.json` (`dbt docs generate`), the same as BigQuery, so `table_storage()` returns
   nothing and the CLI only asks for live metrics on Snowflake and Redshift.
 
@@ -383,7 +385,10 @@ notes that a stale catalog can false-positive, pointing at `dbt docs generate`.
 `verdict/partitioning.py` flags the largest `table` and `incremental` models (1 GiB or more of
 *stored* bytes, at most 20) declaring neither `partition_by` nor `cluster_by`. It runs on
 BigQuery only, since Snowflake micro-partitions automatically and its explicit clustering keys
-are optional large-table tuning rather than debt. The floor is on stored size, but the ranking
+are optional large-table tuning rather than debt, Redshift manages sort and distribution itself,
+and Databricks is deferred until it is settled whether the check suits it (the parser reads only
+`partition_by` / `cluster_by`, so a liquid-clustered Delta table would look unclustered; tracked
+as a GitHub issue with the Databricks hygiene question). The floor is on stored size, but the ranking
 is by the bytes user queries scanned over the window (stored size as the fallback): an
 unpartitioned table only costs money when queried, so the top entry is the fix that saves the
 most. Validated live on `demo_bq`: a planted 1.34 GiB table was flagged, disappeared once

@@ -59,6 +59,8 @@ _ORPHAN_INVENTORY_SKIP_MESSAGES: dict[str, str] = {
     ),
 }
 
+# Redshift keeps no last-modified metadata, so staleness there could only be guessed, which
+# the check never does. Databricks has the metadata but its semantics are not yet validated.
 _STALE_SOURCE_SKIP_MESSAGES: dict[str, str] = {
     "redshift": (
         "Redshift exposes no last-modified metadata (no `last_altered` or `__TABLES__` "

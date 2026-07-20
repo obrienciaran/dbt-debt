@@ -29,9 +29,11 @@ from dbt_debt.verdict.redshift_hygiene import (
     UNSORTED_THRESHOLD,
 )
 
+_MISSING_FIRST_SEEN_DEFAULT = "Missing a first-seen date; age unproven"
+
 _MISSING_FIRST_SEEN_SECTION: dict[str, str] = {
     "snowflake": "Missing a first-seen date, likely new tables",
-    "databricks": "Missing a first-seen date; age unproven",
+    "databricks": _MISSING_FIRST_SEEN_DEFAULT,
 }
 
 _MISSING_FIRST_SEEN_HINTS: dict[str, str] = {
@@ -264,13 +266,8 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
             path = f"  {model.file_path}" if model.file_path else ""
             lines.append(f"  - {model.name}{_kind_tag(model)}{path}")
     if scorecard.missing_first_seen:
-        lines += [
-            "",
-            (
-                f"{_MISSING_FIRST_SEEN_SECTION.get(scorecard.warehouse, 'Missing a first-seen date; age unproven')} "
-                f"({len(scorecard.missing_first_seen)}):"
-            ),
-        ]
+        section = _MISSING_FIRST_SEEN_SECTION.get(scorecard.warehouse, _MISSING_FIRST_SEEN_DEFAULT)
+        lines += ["", f"{section} ({len(scorecard.missing_first_seen)}):"]
         for model in scorecard.missing_first_seen:
             path = f"  {model.file_path}" if model.file_path else ""
             lines.append(f"  - {model.name}{_kind_tag(model)}{path}")

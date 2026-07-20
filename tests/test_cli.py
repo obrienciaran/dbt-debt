@@ -79,6 +79,16 @@ def test_min_age_zero_skips_the_first_seen_call() -> None:
     _scan(with_guard, client)
     assert client.calls["relation_first_seen"] == 1
 
+    databricks = FakeWarehouseClient()
+    databricks_config = Config(
+        project_dir=fixture_dir.parent,
+        target_path=Path(fixture_dir.name),
+        warehouse="databricks",
+        min_age_days=0,
+    )
+    _scan(databricks_config, databricks)
+    assert databricks.calls["relation_first_seen"] == 1
+
 
 def test_invalid_query_comment_pattern_exits_cleanly(
     capsys: pytest.CaptureFixture[str],
@@ -195,6 +205,7 @@ def test_warehouse_auto_detects_from_the_manifest_adapter() -> None:
 
     assert _resolve_warehouse(None, _manifest_for("snowflake")) == "snowflake"
     assert _resolve_warehouse(None, _manifest_for("redshift")) == "redshift"
+    assert _resolve_warehouse(None, _manifest_for("databricks")) == "databricks"
 
 
 def test_missing_adapter_type_falls_back_to_bigquery() -> None:
@@ -279,3 +290,53 @@ def test_cache_key_carries_the_redshift_endpoint(
 
     bigquery: Any = _wrap_cache(FakeWarehouseClient(), Config(project_dir=tmp_path), "db")
     assert bigquery._key_parts["endpoint"] == ""
+
+
+def test_cache_key_carries_the_databricks_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dbt_debt.cli import _wrap_cache
+    from dbt_debt.config import Config
+    from tests.fakes import FakeWarehouseClient
+
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.com")
+    monkeypatch.setenv("DATABRICKS_HTTP_PATH", "/sql/1.0/warehouses/abc")
+    monkeypatch.delenv("DATABRICKS_SERVER_HOSTNAME", raising=False)
+    config = Config(project_dir=tmp_path, warehouse="databricks")
+    wrapped: Any = _wrap_cache(FakeWarehouseClient(), config, "main")
+    assert wrapped._key_parts["endpoint"] == ("workspace.example.com|/sql/1.0/warehouses/abc")
+
+
+def test_databricks_columns_are_skipped_before_query_text_is_requested(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from dbt_debt.cli import _column_report
+    from dbt_debt.config import Config
+    from tests.fakes import FakeWarehouseClient
+
+    client = FakeWarehouseClient(query_texts=["SELECT secret FROM main.marts.model"])
+    report = _column_report(
+        Config(warehouse="databricks", columns=True),
+        client,
+        _manifest_for("databricks"),
+        None,
+        {},
+    )
+    assert report is None
+    assert client.calls["query_texts"] == 0
+    assert "would be unsafe" in capsys.readouterr().err
+
+
+def test_databricks_factory_is_lazy_and_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dbt_debt.cli import _make_client
+    from dbt_debt.config import Config
+    from tests.fakes import FakeWarehouseClient
+
+    expected = FakeWarehouseClient()
+    monkeypatch.setattr(
+        "dbt_debt.consumption.databricks.RealDatabricksClient",
+        lambda config, database=None: expected,
+    )
+    assert _make_client(Config(warehouse="databricks"), "main") is expected

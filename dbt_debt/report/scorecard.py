@@ -285,8 +285,10 @@ class Scorecard:
     too_new_models: tuple[DeadModel, ...] = ()
     """Unqueried but first seen too recently to judge: a third bucket, not counted unused."""
     missing_first_seen: tuple[DeadModel, ...] = ()
-    """Snowflake only: unqueried nodes with no first-seen date yet (ACCOUNT_USAGE.TABLES lags,
-    so these are likely new tables), set aside like the too-new bucket, not counted unused."""
+    """Snowflake and Databricks: unqueried nodes with no first-seen date yet, set aside like the
+    too-new bucket, not counted unused. On Snowflake the date comes from ACCOUNT_USAGE.TABLES,
+    which lags ~90 minutes. On Databricks it comes from retained lineage, which may be absent
+    after the rolling retention window or when dbt rebuilds a table."""
     rarely_used: tuple[RarelyUsedModel, ...] = ()
     """Queried at most `rare_threshold` times: a review band, never counted unused."""
     rare_threshold: int = 0
@@ -309,6 +311,7 @@ class Scorecard:
     """YAML-declared columns missing from the built relation, per catalog.json."""
     columns: ColumnReport | None = None
     orphans: OrphanReport | None = None
+    warehouse: str = "bigquery"
 
 
 def _affected_semantic_entry(
@@ -360,11 +363,16 @@ def build_scorecard(
     every unused-derived figure: the count, the removable tests, the exposure and semantic
     impact, and the reclaimable bytes. On Snowflake an unqueried node with no first-seen date
     at all is set aside the same way (as "missing a first-seen date, likely a new table"), since
-    ACCOUNT_USAGE.TABLES lags behind reality. Queried nodes with at most `config.rare_threshold`
-    queries land in the separate rarely-used review band, which feeds none of those figures
-    either. `table_storage` (Snowflake only) adds the time-travel/fail-safe breakdown to the
-    dead-asset lists; the totals and ranking come from `storage_bytes` as ever. `table_hygiene`
-    (Redshift only) feeds the table-hygiene review check. `now` is injectable for tests.
+    ACCOUNT_USAGE.TABLES lags behind reality; missing data may appear on a later scan. On
+    Databricks the date comes from retained lineage rather than Unity Catalog ``created`` (which
+    dbt rebuilds can reset); a relation absent from retained lineage is always set aside, even
+    when ``--min-age-days`` is zero. On BigQuery a missing first-seen means zero jobs in the
+    whole lookback window — the strongest unused signal there — so those are judged normally.
+    Queried nodes with at most `config.rare_threshold` queries land in the separate rarely-used
+    review band, which feeds none of those figures either. `table_storage` (Snowflake only) adds
+    the time-travel/fail-safe breakdown to the dead-asset lists; the totals and ranking come from
+    `storage_bytes` as ever. `table_hygiene` (Redshift only) feeds the table-hygiene review check.
+    `now` is injectable for tests.
     """
 
     usage_rows = list(usage_rows)
@@ -378,9 +386,15 @@ def build_scorecard(
     # On Snowflake, first-seen comes from ACCOUNT_USAGE.TABLES, which lags (~90 minutes): a
     # dead node with no row yet cannot prove its age, so it is set aside as a likely new table
     # rather than judged. On BigQuery a missing first-seen means zero jobs all window (the
-    # strongest unused signal), so those are judged normally.
+    # strongest unused signal), so those are judged normally. On Redshift a missing first-seen
+    # means no jobs within SYS view retention — judged normally like BigQuery. On Databricks
+    # first-seen comes from retained lineage; a relation absent from retained lineage has
+    # unproven age and is always set aside: --min-age-days=0 may disable the recent-age guard,
+    # but it must not turn unknown age into an unused verdict.
     missing: set[str] = set()
-    if config.warehouse == "snowflake" and min_age > timedelta(0):
+    if config.warehouse == "databricks" or (
+        config.warehouse == "snowflake" and min_age > timedelta(0)
+    ):
         missing = missing_first_seen_models(unqueried, first_seen_ids)
     dead = unqueried - too_new - missing
 
@@ -389,7 +403,9 @@ def build_scorecard(
     usage_by_model = model_usage(manifest, usage_rows)
     rare = rarely_used_models(usage_by_model, config.rare_threshold)
     rare -= too_new_models(rare, first_seen_ids, now_utc, min_age)
-    if config.warehouse == "snowflake" and min_age > timedelta(0):
+    if config.warehouse == "databricks" or (
+        config.warehouse == "snowflake" and min_age > timedelta(0)
+    ):
         rare -= missing_first_seen_models(rare, first_seen_ids)
 
     # When the column stage ran, tests guarding a dead column are removable too: rebuild the
@@ -558,6 +574,7 @@ def build_scorecard(
     return Scorecard(
         project_name=manifest.project_name,
         lookback_days=config.lookback_days,
+        warehouse=config.warehouse,
         active_models=len(manifest.models) - len(unqueried),
         unused_models=len(dead),
         removable_tests=tuple(

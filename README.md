@@ -1,6 +1,6 @@
 # 🧹 dbt-debt
 
-### dbt-debt finds the dead weight in a dbt project on BigQuery, Snowflake, or Redshift.
+### dbt-debt finds the dead weight in a dbt project on BigQuery, Snowflake, Redshift, or Databricks.
 
 Which models and columns nobody uses anymore, which are barely used, which are safe to remove, and
 which tables exist in your warehouse with no dbt model behind them.
@@ -65,7 +65,8 @@ which is also the most BigQuery keeps. Snowflake keeps a year, so `--lookback-da
 to 365 there. Redshift's SYS query-history views keep much less (AWS leaves the exact
 retention unstated; the older STL views keep seven days), so on Redshift the effective window
 is however much history the account actually retains, so "unused" there means "unused within
-that history".
+that history". Databricks lineage and query-history system tables retain a rolling 365 days;
+`system.query.history` is in Public Preview, so its schema, availability, and pricing can change.
 
 - **active / unused models.** A model is **unused** if, in the window, nothing queried it and
   nothing queried anything built from it. Everything else is **active**. Seeds and snapshots are
@@ -82,12 +83,18 @@ that history".
   one. On Snowflake, a model with no first-seen date at all is set aside the same way ("missing a
   first-seen date, likely a new table"), because the metadata behind the date
   (`ACCOUNT_USAGE.TABLES`) lags about 90 minutes.
+  On Databricks, first-seen comes from retained lineage rather than Unity Catalog `created`,
+  which can reset when dbt rebuilds a table. A relation absent from retained lineage is always
+  set aside with unproven age, even when `--min-age-days 0` is used.
 - **active / unused columns.** A column is **unused** if no query read it and nothing read a
   column built from it. To see which columns a query read, dbt-debt parses the SQL text of every
   query in the log. Some SQL fails to parse and is left out, so the report says how much of the
   query text it could read ("column verdicts based on 96% of query text"), the verdicts rest on
   that share, and the unparsed remainder could contain column reads the scan did not see. Model
   verdicts come from the query log's own metadata and never depend on parsing.
+  Databricks currently skips ``--columns``: complete query-text or column-lineage coverage has not
+  been proven across supported compute paths, so an unused-column verdict would be unsafe
+  (tracked as a GitHub issue).
 - **columns you could remove.** Unused columns nothing in the project still depends on (no data
   test, no contract). These are suggestions, not an automatic delete, since "unused" comes from
   the query log, which can't see everything (see *What counts as usage*). An unused column that
@@ -128,7 +135,9 @@ that history".
   source datasets (skipped with a warning without it); Snowflake needs no extra grant. On
   Snowflake the date also moves on DDL changes (even a table comment), so a stale table can
   occasionally look fresher than its data. Redshift exposes no last-modified metadata at all,
-  so the check is skipped there with a note.
+  so the check is skipped there with a note. Databricks source freshness is also deferred and
+  skipped until safe last-data semantics are established (tracked as GitHub issues, along with
+  ``--columns`` and semantic validation for Databricks).
 - **documentation drift.** A column declared in a model's YAML that no longer exists in the
   built table (per `catalog.json`) is stale documentation to delete. Rerun `dbt docs generate`
   first if the catalog is old.
@@ -146,7 +155,8 @@ that history".
   statistics (`stats_off` 10+, needs ANALYZE), or heavy slice skew (4x+, needs a
   distribution-key review). Listed with stored size and the bytes user queries scanned, most
   scanned first. Automatic vacuum and analyze usually keep this list empty, and an empty list is
-  the healthy state. BigQuery and Snowflake maintain storage layout themselves.
+  the healthy state. BigQuery and Snowflake maintain storage layout themselves; no
+  Databricks-specific table-hygiene verdict is defined yet.
 - **top unused models / columns.** Biggest win first. A whole unused table shows the storage
   you'd reclaim; on Snowflake and Redshift the sizes come live from the warehouse (no
   `dbt docs generate` needed), and Snowflake's include the time-travel and fail-safe copies
@@ -168,10 +178,12 @@ or with uv, as a project dependency (`uv add dbt-debt`), a standalone tool
 uvx dbt-debt scan
 ```
 
-BigQuery support is built in. For Snowflake or Redshift, add the extra:
-`pip install "dbt-debt[snowflake]"` or `pip install "dbt-debt[redshift]"`.
+BigQuery support is built in. For Snowflake, Redshift, or Databricks, add the matching extra:
+`pip install "dbt-debt[snowflake]"`, `pip install "dbt-debt[redshift]"`, or
+`pip install "dbt-debt[databricks]"`.
 
-(For the Snowflake and Redshift install extras, connection setup, and permissions, see [`USAGE.md`](USAGE.md).)
+(For warehouse connection setup, required permissions, and Databricks preview limitations, see
+[`USAGE.md`](USAGE.md).)
 
 ## 🚀 Using it
 
@@ -198,16 +210,16 @@ Export / Help; the Help tab lists the scan flags and example commands). When you
 | `dbt-debt scan --min-age-days 30` | anything first seen in the last 30 days is "too new to judge", not unused (default: 7; `0` turns the guard off) |
 | `dbt-debt scan --rare-threshold 10` | models with at most 10 queries in the window are "rarely used" (default: 5; `0` turns the band off) |
 
-The warehouse is detected from your dbt artifacts (`--warehouse bigquery|snowflake|redshift`
-overrides). Snowflake and Redshift need their optional extras, `pip install
-'dbt-debt[snowflake]'` / `pip install 'dbt-debt[redshift]'`.
+The warehouse is detected from your dbt artifacts
+(`--warehouse bigquery|snowflake|redshift|databricks` overrides). Snowflake, Redshift, and
+Databricks need their optional extras.
 
-For the cache, how it works, permissions and sign-in (BigQuery, Snowflake, and Redshift), full
-options, and how to work on dbt-debt, see [`USAGE.md`](USAGE.md).
+For the cache, how it works, permissions and sign-in, full options, and how to work on dbt-debt,
+see [`USAGE.md`](USAGE.md).
 
 ## 🔧 Notes
 
 - Built using Claude Fable 5 and ten years of experience as a data professional in medium to large enterprises.
 - Secure, read only tool. No login. No passwords. Security also audited using Cloudflare's [`security audit skill`](https://github.com/cloudflare/security-audit-skill).
-- dbt-debt is an independent project and is not affiliated with dbt Labs, Snowflake, Google Cloud, or Amazon Web Services.
+- dbt-debt is an independent project and is not affiliated with dbt Labs, Snowflake, Google Cloud, Databricks or Amazon Web Services.
 - If you love this project, please consider giving it a ⭐.

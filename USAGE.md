@@ -11,9 +11,11 @@ put together, see [`DESIGN.md`](DESIGN.md).
 2. Ask the warehouse which tables were queried in the lookback window, ignoring dbt's own
    queries. On BigQuery this reads `INFORMATION_SCHEMA.JOBS`; on Snowflake,
    `ACCOUNT_USAGE.ACCESS_HISTORY`; on Redshift, `SYS_QUERY_HISTORY` joined to the scan steps
-   in `SYS_QUERY_DETAIL`. The same rows say how many bytes each query scanned, which ranks
-   the review lists by what queries actually cost. With `--columns`, also read the query
-   text to see which columns were used.
+   in `SYS_QUERY_DETAIL`; on Databricks, it conservatively combines
+   `system.access.table_lineage` with `system.query.history`. The same rows say how many bytes
+   each query scanned, which ranks the review lists by what queries actually cost. With
+   `--columns`, also read the query text to see which columns were used (currently disabled on
+   Databricks).
 3. Trace each column back through your models' SQL, so usage flows up to the columns that fed
    it.
 4. Compare what was used against everything in the project, and report what's unused and safe
@@ -75,11 +77,20 @@ A few cases to keep in mind:
   keep seven days), so on Redshift the window is capped by whatever the account retains and
   "unused" is a correspondingly weaker signal. A report that runs once a year can still look
   unused; that needs a human call.
+- **Databricks hybrid evidence.** Successful `SELECT` lineage with a statement ID is joined to
+  query history, including result-cache repeats, so dbt-tagged statements can be excluded.
+  Statement IDs are documented for SQL warehouses and can also appear for serverless events.
+  Lineage without a joinable ID counts as usage only when it is source-only. An unjoinable
+  source-to-target event is omitted as probable build lineage. This can over-count use, but it
+  must not turn incomplete metadata into a false "unused" verdict.
 - **Anything created recently.** A table first seen in the query log fewer than 7 days ago
   (`--min-age-days`) hasn't had a fair chance to be queried, so it's reported as "too new to
   judge" and left out of the removable-test and reclaimable-storage figures. On Snowflake, a
   table with no first-seen date at all gets the same treatment ("missing a first-seen date,
   likely a new table"), because `ACCOUNT_USAGE.TABLES` lags about 90 minutes behind reality.
+  Databricks instead uses the earliest event still present in its lineage system table. Unity
+  Catalog `created` is not used because a dbt table rebuild can reset it. Missing lineage means
+  age is unproven and the relation is always set aside, even with `--min-age-days 0`.
 - **Semantic-layer declarations.** Models feeding a semantic model, metric, or saved query are
   flagged for review when unused (like exposures), and columns a semantic model names are never
   counted as removable. Each affected consumer is reported with its cause (the unused model it
@@ -87,6 +98,9 @@ A few cases to keep in mind:
   section of its own.
 - **`SELECT *`** counts every column as used, so a column read only through a `*` is never
   wrongly called unused.
+- **Databricks columns are disabled.** `--columns` prints a warning and continues with
+  model-level results. Complete query-text or column-lineage coverage has not been established
+  across supported compute paths, so column-level absence is not treated as evidence.
 
 So "unused" means "no sign of use in the log". How far to trust it depends on who reads the
 column:
@@ -252,22 +266,86 @@ saves the most. Automatic vacuum and analyze (always on for Serverless and the d
 provisioned clusters) usually keep every figure near zero, so the section simply not
 appearing is the healthy state.
 
+### Databricks
+
+Install the optional SQL connector:
+
+```
+pip install 'dbt-debt[databricks]'
+```
+
+Use an existing SQL warehouse and set the same endpoint variables commonly used by dbt:
+
+```
+export DATABRICKS_HOST=https://<workspace-host>
+export DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/<warehouse-id>
+export DATABRICKS_TOKEN=<personal-access-token>
+```
+
+`DATABRICKS_SERVER_HOSTNAME` can replace `DATABRICKS_HOST`. A token is optional when the
+Databricks SQL Connector is configured for another supported authentication method. Endpoint
+values isolate cache entries; tokens and query results are never part of the cache key.
+
+**Required system-table grants.** The scan fails safely during preflight unless its principal can
+read both usage sources. An administrator can grant least-privilege access with the equivalent
+Unity Catalog permissions:
+
+```sql
+GRANT USE CATALOG ON CATALOG system TO `<principal>`;
+GRANT USE SCHEMA ON SCHEMA system.access TO `<principal>`;
+GRANT SELECT ON TABLE system.access.table_lineage TO `<principal>`;
+GRANT USE SCHEMA ON SCHEMA system.query TO `<principal>`;
+GRANT SELECT ON TABLE system.query.history TO `<principal>`;
+```
+
+The principal also needs permission to use the selected SQL warehouse. For orphan discovery, it
+additionally needs `USE CATALOG`, `USE SCHEMA`, and enough metadata visibility on the dbt-managed
+catalogs and schemas for their relations to appear in `system.information_schema.tables`. Missing
+inventory visibility skips orphan verdicts while undeclared sources remain available from local
+artifacts.
+
+Databricks support is deliberately conservative:
+
+- Query history (`system.query.history`) is in Public Preview. It covers SQL warehouses and
+  serverless notebook/job compute, while lineage supplies the conservative path for other
+  supported reads. Preview schemas, availability, and pricing can change.
+- Query history and lineage system tables have a rolling 365-day retention window. A longer
+  `--lookback-days` value cannot recover older evidence, so "unused" means no observed use in the
+  retained metadata. System-table data is regional and can include multiple workspaces.
+- Customer-managed keys can hide `statement_text`. Unknown text counts as usage rather than
+  silently discarding the read, but that can retain a dbt-issued read conservatively.
+- `--columns` is disabled. Source freshness and Databricks-specific table hygiene are deferred and
+  skipped with an explicit warning or empty result. Storage ranking continues to use
+  dbt-databricks' `catalog.json` `bytes` statistic.
+- A controlled Free Edition validation on 2026-07-19 built a four-model dbt project, ran dbt tests
+  and docs generation, issued separate SQL-warehouse reads, and ran a serverless notebook read.
+  Fresh query-history and lineage records appeared after roughly 10–20 minutes. SQL-warehouse
+  lineage IDs joined exactly to query history, dbt query comments were excluded, relation
+  inventory and `catalog.json` storage worked, and the scan correctly reported three active
+  models and one deliberately unused model. Serverless lineage also had joinable statement IDs in
+  this workspace; the source-only fallback remains necessary where Databricks omits them. Exact
+  repeated warehouse reads pointed to the original lineage through `cache_origin_statement_id`
+  and were counted separately.
+
 ## ⚙️ Options
 
 ```
 dbt-debt scan
     --project-dir .           your dbt project folder (default: current folder)
     --target-path target      where manifest.json and catalog.json live
-    --warehouse <name>        bigquery, snowflake, or redshift (default: read from the manifest)
+    --warehouse <name>        bigquery, snowflake, redshift, or databricks
+                              (default: read from the manifest)
     --project <id>            which database to query: the GCP project on BigQuery, the
-                              database on Snowflake or Redshift (default: read from your models)
+                              database on Snowflake or Redshift, or the catalog on Databricks
+                              (default: read from your models)
     --region US               which BigQuery region your query log is in (BigQuery only)
     --connection <name>       named Snowflake connection from connections.toml (Snowflake only;
-                              Redshift connects from REDSHIFT_* environment variables)
+                              Redshift and Databricks connect from environment variables)
     --lookback-days 180       how far back to look (max 180 on BigQuery, 365 on Snowflake;
-                              capped by SYS-view retention on Redshift)
+                              capped by retained metadata on Redshift and Databricks)
     --query-comment-pattern   how to recognise dbt's own queries (a regex)
-    --columns                 also check which columns are unused (default: models only)
+    --columns                 also check which columns are unused (default: models only;
+                              explicitly skipped on Databricks)
     --min-age-days 7          tables first seen in the query log more recently than this are
                               "too new to judge", not unused (0 disables the guard)
     --rare-threshold 5        models queried at most this many times are "rarely used"
@@ -323,4 +401,6 @@ ruff check . && ruff format --check . && mypy dbt_debt
 ```
 
 The tests run on small sample dbt files with a stand-in for the warehouse, so they need no
-cloud access and no credentials. For how the code is put together, see [`DESIGN.md`](DESIGN.md).
+cloud access and no credentials. To exercise the optional Databricks import locally, install both
+extras with `pip install -e '.[dev,databricks]'`. For how the code is put together, see
+[`DESIGN.md`](DESIGN.md).

@@ -159,9 +159,28 @@ def test_bigquery_dead_node_without_first_seen_is_judged_unused() -> None:
     assert card.unused_models == 3
 
 
+def test_databricks_dead_node_without_lineage_first_seen_is_always_set_aside() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    first_seen = {STG_KEY: now - timedelta(days=170), SEED_KEY: now - timedelta(days=170)}
+    config = Config(
+        project_dir=FIXTURE.parent.parent,
+        target_path=FIXTURE.parent.name,
+        warehouse="databricks",
+        min_age_days=0,
+    )
+    card = build_scorecard(manifest, graph, [], {}, config, first_seen=first_seen, now=now)
+
+    assert [m.name for m in card.missing_first_seen] == ["fct_orders"]
+    assert card.unused_models == 2
+    assert [m.name for m in card.dead_models] == ["stg_orders", "country_codes"]
+
+
 def test_redshift_dead_node_without_first_seen_is_judged_unused() -> None:
     # On Redshift a missing first-seen means no jobs within the SYS views' retention — judged
-    # normally like BigQuery; the set-aside exists only for Snowflake's lagging metadata.
+    # normally like BigQuery; the set-aside exists for Snowflake's lagging metadata and
+    # Databricks' retained-lineage gaps.
     manifest = load_manifest(FIXTURE)
     graph = Graph.from_manifest(manifest)
     now = datetime(2026, 7, 1, tzinfo=timezone.utc)
@@ -570,6 +589,36 @@ def test_scan_on_bigquery_never_asks_for_storage_metrics() -> None:
     client = FakeWarehouseClient()
     _scan(_config(), client)
     assert client.calls["table_storage"] == 0
+
+
+def test_scan_on_databricks_retains_catalog_storage_and_skips_optional_checks(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    old = datetime.now(timezone.utc) - timedelta(days=90)
+    config = Config(
+        project_dir=FIXTURE.parent.parent,
+        target_path=Path(FIXTURE.parent.name),
+        warehouse="databricks",
+        min_age_days=7,
+    )
+    client = FakeWarehouseClient(
+        first_seen={STG_KEY: old, FCT_KEY: old, SEED_KEY: old},
+        table_storage={
+            FCT_KEY: TableStorage(active_bytes=999999, time_travel_bytes=0, failsafe_bytes=0)
+        },
+        last_modified={SOURCE_KEY: old},
+        table_hygiene={FCT_KEY: _hygiene_row(unsorted=99)},
+    )
+    card = _scan(config, client)
+    assert client.calls["table_storage"] == 0
+    assert client.calls["source_last_modified"] == 0
+    assert client.calls["table_hygiene"] == 0
+    assert card.stale_checked is False
+    assert card.unhealthy_tables == ()
+    # The generic fixture's catalog.json bytes remain in use; the fake live value must not win.
+    assert card.dead_models
+    assert all(model.total_bytes != 999999 for model in card.dead_models)
+    assert "freshness is deferred" in capsys.readouterr().err
 
 
 def test_scan_on_redshift_prefers_live_storage_metrics_over_catalog_sizes() -> None:

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Set
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, cast
 
 from dbt_debt.config import Config
@@ -196,22 +196,9 @@ class RealRedshiftClient:
         except redshift_connector.Error as exc:
             raise WarehouseError(f"Redshift query for {stage} failed: {exc}") from exc
         return [
-            {column: _as_utc(value) for column, value in zip(columns, row)} for row in rows or []
+            {column: jobs.as_utc(value) for column, value in zip(columns, row)}
+            for row in rows or []
         ]
-
-
-def _as_utc(value: Any) -> Any:
-    """Stamp UTC on naive datetimes; everything else passes through.
-
-    The SYS views report timestamps in UTC but as `timestamp without time zone`, so the
-    driver hands back naive datetimes (confirmed live), unlike BigQuery and Snowflake, whose
-    values arrive timezone-aware. The verdicts compare against aware `now` values, so the
-    zone is restored here, at the one boundary that knows it was dropped.
-    """
-
-    if isinstance(value, datetime) and value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
 
 
 def _programming_error() -> type[Exception]:

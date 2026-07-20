@@ -259,8 +259,8 @@ The design decisions, and what the live scans showed:
   on Redshift than elsewhere, documented rather than worked around. First-seen still comes
   from the query history, never `SVV_TABLE_INFO.create_time`, which resets on every rebuild.
   A dead node with no first-seen row means no jobs within retention and is judged normally,
-  like BigQuery; the missing-first-seen set-aside stays Snowflake-only (lagging metadata is
-  Snowflake's failure mode, not Redshift's). *Measured 2026-07-11:* `MIN(start_time)` on
+  like BigQuery; the missing-first-seen set-aside is for Snowflake's lagging TABLES metadata
+  and Databricks' retained-lineage gaps, not Redshift's failure mode. *Measured 2026-07-11:* `MIN(start_time)` on
   `SYS_QUERY_HISTORY` still reaches the demo account's first activity (2026-07-10), so the
   account is too young to show a retention floor; re-measure once it is comfortably older
   than the candidate windows (from mid-August 2026).
@@ -443,6 +443,85 @@ and sources are taken out too, so a seed sitting next to your models is never fl
 `verdict/orphans.py` and `verdict/sources.py` only do the comparing. They are handed ready-made
 sets; the file reading and the warehouse call happen before them. If the table-list access is
 missing, the tool falls back to reporting undeclared sources only rather than failing the scan.
+
+## Databricks adapter and metadata validation
+
+The Databricks adapter uses the existing `WarehouseClient` seam and lazily imports the optional
+SQL connector. Authentication comes from `DATABRICKS_HOST` (or
+`DATABRICKS_SERVER_HOSTNAME`), `DATABRICKS_HTTP_PATH`, and an optional `DATABRICKS_TOKEN`; the
+normalized host and HTTP path isolate cache entries without including credentials. The required
+preflight reads both `system.access.table_lineage` and `system.query.history`. Partial access
+fails closed because a relation cannot safely be called unused from only one of those sources.
+Relation inventory is separately optional and reads `system.information_schema.tables`.
+
+Usage follows a conservative hybrid. Lineage with a `statement_id` joins successful `SELECT`
+history through `cache_origin_statement_id`, which equals the query's own ID for an uncached query
+and the originating ID for a cache hit. Databricks documents lineage statement IDs for SQL
+warehouses, while controlled serverless notebook events also exposed joinable IDs. That permits
+exact dbt query-comment exclusion while retaining cache repeats wherever the ID is available.
+Lineage without a joinable statement ID counts as usage only when it has a source and no table or
+path target. Source-to-target events are treated as probable build lineage and omitted. This
+asymmetry intentionally permits false activity rather than false "unused" verdicts. Missing or
+encrypted statement text also counts as usage.
+
+First-seen is the earliest source or target event still retained in table lineage. Unity Catalog
+`created` is not used because dbt table materializations can reset it. A relation absent from
+retained lineage has unproven age and is always set aside, including when the caller disables the
+recent-age threshold. Databricks query history is in Public Preview and, like table lineage, has
+a rolling 365-day retention window; the effective evidence window cannot exceed retained,
+regional system-table data.
+
+Column analysis is disabled because complete query-text or column-lineage coverage has not been
+proved across SQL warehouses, serverless compute, and classic compute. Source freshness is
+deferred because no safe last-data timestamp has been established, and this contribution defines
+no Databricks-specific hygiene verdict. These paths skip explicitly rather than manufacture
+negative findings. Live storage metrics are also deferred: ranking uses the ``bytes`` statistic
+from ``catalog.json`` (``dbt docs generate``), as on BigQuery when live
+``INFORMATION_SCHEMA.TABLE_STORAGE`` is unavailable. Snowflake and Redshift overwrite catalog
+sizes on each scan.
+
+### Live validation results (2026-07-18 to 2026-07-19)
+
+A controlled temporary development schema exercised direct and view reads, CTAS and replacement,
+an exact repeated query, a dbt table run, and a dbt test on a SQL warehouse. Equivalent
+synthetic reads and writes succeeded on serverless and classic job compute. No production or raw
+object was created or modified. The temporary schema, workspace job, notebook, and job compute
+were removed, and follow-up inventory confirmed no remaining schema or objects.
+
+The available principal could read `system.information_schema.tables`, but lacked `USE SCHEMA` on
+both `system.query` and `system.access`. The adapter's uncached end-to-end scan therefore stopped
+at its required permission preflight, as designed, without attempting a weaker verdict.
+
+A second validation in Databricks Free Edition had access to both required system schemas. It
+built a four-model dbt-databricks project, including a view and a deliberately unread model, then
+ran tests, docs generation, and separate SQL-warehouse reads. Fresh system-table rows appeared
+after roughly 10–20 minutes. SQL-warehouse lineage IDs matched query-history statement IDs,
+uncached rows had `cache_origin_statement_id` equal to their own statement ID, dbt's JSON query
+comment was visible and excluded, and read/write lineage shapes matched the conservative query.
+The uncached end-to-end scan reported three active models and the deliberately unread model as
+unused, including its removable tests and `catalog.json` storage bytes. Relation inventory also
+completed against the inferred Unity Catalog catalog and schema.
+
+A temporary Free Edition serverless notebook job successfully read the active table and view and
+was deleted immediately after completion. Its delayed lineage rows included job and notebook
+metadata, `direct_access` values, and statement IDs that matched serverless query history in this
+workspace. Two exact repeated warehouse reads reused an earlier result: both history rows pointed
+their `cache_origin_statement_id` at the original lineage statement and were counted separately.
+Column-lineage rows were visible for the SQL-warehouse workload, but column mode remains disabled
+because this one controlled workload does not prove complete cross-compute coverage.
+Classic-compute coverage remains documentation-based.
+
+The available evidence did confirm that Unity Catalog reports managed tables as `MANAGED` and
+views as `VIEW`. A direct `CREATE OR REPLACE TABLE` preserved `created` while changing
+`last_altered`, but a dbt table materialization changed `created`, validating the decision not to
+use that field for age. dbt-databricks 1.11 catalog output used the already-supported `bytes`,
+`rows`, and `has_stats` keys. Representative compiled model SQL, CTAS, view, and query statements
+parsed with SQLGlot's `databricks` dialect; `DESCRIBE DETAIL` did not, which is irrelevant while
+the disabled column path never parses it.
+
+The synthetic subtraction also confirmed an existing distinction: a physical table omitted from
+the manifest but referenced by compiled model SQL is an undeclared source, not an orphan. An
+unreferenced view was correctly inventoried as the physical orphan.
 
 ## Seeds, snapshots, and the semantic layer
 

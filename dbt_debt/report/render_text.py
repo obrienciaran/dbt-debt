@@ -48,10 +48,10 @@ _MISSING_FIRST_SEEN_HINTS: dict[str, str] = {
 }
 
 _RETENTION_CAP_SOURCE: dict[str, str] = {
-    "redshift": "Redshift SYS views retain",
-    "snowflake": "Snowflake ACCOUNT_USAGE retains",
-    "databricks": "Databricks system tables retain",
     "bigquery": "BigQuery INFORMATION_SCHEMA.JOBS retains",
+    "snowflake": "Snowflake ACCOUNT_USAGE retains",
+    "redshift": "Redshift SYS views retain",
+    "databricks": "Databricks system tables retain",
 }
 """What holds the window short, keyed by warehouse; named in the capped lookback line.
 

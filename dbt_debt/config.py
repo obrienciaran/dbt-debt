@@ -19,6 +19,13 @@ which the statement-type filter alone would keep. Configurable for non-default c
 """
 
 SUPPORTED_WAREHOUSES = ("bigquery", "snowflake", "redshift", "databricks")
+"""The warehouses a scan can target, in the order everything else lists them.
+
+This order is the style for every warehouse enumeration, in code and in docs. It is the
+order support was added and the order of completeness, BigQuery being the first
+implementation and Databricks the newest. argparse shows it to users in `--warehouse` help, so
+a list that disagrees reads as a different set.
+"""
 
 WAREHOUSE_DIALECTS = {
     "bigquery": "bigquery",

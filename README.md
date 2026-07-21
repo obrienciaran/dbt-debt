@@ -1,6 +1,6 @@
 # 🧹 dbt-debt
 
-### dbt-debt finds the dead weight in a dbt project on Snowflake, BigQuery, Databricks and Redshift.
+### dbt-debt finds the dead weight in a dbt project on BigQuery, Snowflake, Redshift, and Databricks.
 
 Which models and columns nobody uses anymore, which are barely used, which are safe to remove, and
 which tables exist in your warehouse with no dbt model behind them.
@@ -67,8 +67,8 @@ days, and each warehouse keeps a different maximum:
 |---|---|
 | BigQuery | 180 days |
 | Snowflake | 365 days |
-| Databricks | 365 days |
 | Redshift | 7 days |
+| Databricks | 365 days |
 
 Ask for more than a warehouse keeps and you get its maximum, and the report tells you. Only
 Redshift hits this at the default, so "unused" there means unused in the last week.

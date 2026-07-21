@@ -242,7 +242,7 @@ The design decisions, and what the live scans showed:
   values.
 - **Retention caps the window, and the report says so.** Every warehouse has an entry in
   `WAREHOUSE_RETENTION_DAYS` (`config.py`) and `Config.effective_lookback_days` clips the
-  request to it: BigQuery 180, Snowflake 365, Databricks 365, Redshift seven. When the clip
+  request to it: BigQuery 180, Snowflake 365, Redshift seven, Databricks 365. When the clip
   bites, the header names both windows, the CLI prints the same sentence to stderr before the
   scan starts, and JSON carries `lookback_days` beside `requested_lookback_days`. Only Redshift
   reaches it at the 180-day default; elsewhere it takes an explicit over-ask such as

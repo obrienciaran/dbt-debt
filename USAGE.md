@@ -72,7 +72,7 @@ A few cases to keep in mind:
   consumers as exposures (see below); a model feeding one is flagged for review instead of
   marked removable.
 - **Anything used less often than the lookback window.** Each warehouse keeps a different
-  amount of query history: BigQuery 180 days, Snowflake 365, Databricks 365, Redshift seven
+  amount of query history: BigQuery 180 days, Snowflake 365, Redshift seven, Databricks 365
   (AWS leaves the SYS retention unstated; the older STL views keep seven days). Ask for more
   than a warehouse keeps and the scan falls back to its maximum and says so, on the scorecard
   header and on stderr, with `requested_lookback_days` beside `lookback_days` in the JSON:

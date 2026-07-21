@@ -6,6 +6,8 @@ All notable changes to this project are recorded here. Versions follow
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-21
+
 ### Added
 
 - **Databricks support.** A fourth warehouse adapter, installed with the `[databricks]` extra
@@ -57,5 +59,6 @@ the warehouse's query history, and reports what is safely removable. Also finds 
 relations, undeclared sources, unused declared sources, and stale sources. Reports only, and
 never deletes anything.
 
-[Unreleased]: https://github.com/obrienciaran/dbt-debt/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/obrienciaran/dbt-debt/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/obrienciaran/dbt-debt/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/obrienciaran/dbt-debt/releases/tag/v0.0.1

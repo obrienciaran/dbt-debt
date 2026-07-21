@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dbt-debt"
-version = "0.0.1"
+version = "0.1.0"
 description = "A technical-debt scorecard for dbt projects on BigQuery, Snowflake, Redshift, and Databricks: finds unused models and columns and what is safely removable."
 readme = "README.md"
 requires-python = ">=3.10"

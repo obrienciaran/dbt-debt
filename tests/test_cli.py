@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -259,10 +260,13 @@ def test_unsupported_adapter_exits_two(tmp_path: Path, capsys: pytest.CaptureFix
 
 
 def test_snowflake_scan_without_the_connector_exits_three(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    without_connector: Callable[[str], None],
 ) -> None:
-    # The optional extra is absent from the dev environment, so a Snowflake scan must stop at
-    # exit 3 with the install hint — proof the SDK is only reached for the selected warehouse.
+    # With the optional extra missing, a Snowflake scan must stop at exit 3 with the install
+    # hint — proof the SDK is only reached for the selected warehouse.
+    without_connector("snowflake.connector")
     manifest = {
         "metadata": {**_METADATA, "adapter_type": "snowflake"},
         "nodes": {"model.p.m": {"resource_type": "model", "name": "m", "schema": "s"}},
@@ -275,10 +279,13 @@ def test_snowflake_scan_without_the_connector_exits_three(
 
 
 def test_redshift_scan_without_the_connector_exits_three(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    without_connector: Callable[[str], None],
 ) -> None:
     # Same isolation proof for the Redshift extra: the SDK is only reached for the selected
     # warehouse, and its absence is a readable exit 3.
+    without_connector("redshift_connector")
     manifest = {
         "metadata": {**_METADATA, "adapter_type": "redshift"},
         "nodes": {"model.p.m": {"resource_type": "model", "name": "m", "schema": "s"}},
@@ -288,6 +295,24 @@ def test_redshift_scan_without_the_connector_exits_three(
     (target / "manifest.json").write_text(json.dumps(manifest))
     assert main(["scan", "--project-dir", str(tmp_path), "--no-cache"]) == 3
     assert "dbt-debt[redshift]" in capsys.readouterr().err
+
+
+def test_databricks_scan_without_the_connector_exits_three(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    without_connector: Callable[[str], None],
+) -> None:
+    # And the third optional extra, so every warehouse behind one carries the same contract.
+    without_connector("databricks")
+    manifest = {
+        "metadata": {**_METADATA, "adapter_type": "databricks"},
+        "nodes": {"model.p.m": {"resource_type": "model", "name": "m", "schema": "s"}},
+    }
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "manifest.json").write_text(json.dumps(manifest))
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache"]) == 3
+    assert "dbt-debt[databricks]" in capsys.readouterr().err
 
 
 def _scan_stderr(
@@ -322,15 +347,25 @@ def test_no_cap_warning_when_the_request_fits_retention(
     )
 
 
-def test_no_cap_warning_off_redshift(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_no_cap_warning_off_redshift(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    without_connector: Callable[[str], None],
+) -> None:
+    # The cap warning is written before the client is built, so hiding the connector keeps
+    # the scan from reaching a live account without touching the assertion.
+    without_connector("snowflake.connector")
     assert "lookback displayed" not in _scan_stderr(tmp_path, capsys, "snowflake")
 
 
 def test_an_over_ask_warns_on_stderr_off_redshift(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    without_connector: Callable[[str], None],
 ) -> None:
     # Asking Snowflake for more than the year it keeps is the only way a non-Redshift scan
     # reaches the cap, and it must say so rather than reporting the request back unchanged.
+    without_connector("snowflake.connector")
     err = _scan_stderr(tmp_path, capsys, "snowflake", "--lookback-days", "400")
     assert "Only 365 days lookback displayed" in err
     assert "Snowflake ACCOUNT_USAGE retains only 365" in err

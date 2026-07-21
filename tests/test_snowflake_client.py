@@ -1,12 +1,15 @@
 """Tests for the Snowflake client's SDK-free surface and the warehouse seam.
 
-The connector is deliberately absent from the dev environment (it is an optional extra), so
-these tests pin exactly the behaviour that must hold without it: the module imports cleanly,
-the missing dependency produces a friendly `WarehouseError`, the Protocol is satisfied, and the
-paths that never reach the SDK (empty datasets, no inferable database) behave.
+The connector is an optional extra, so these tests pin the behaviour that must hold without it:
+the module imports cleanly, the missing dependency produces a friendly `WarehouseError`, the
+Protocol is satisfied, and the paths that never reach the SDK (empty datasets, no inferable
+database) behave. The missing dependency is simulated via `without_connector`, so these hold
+whether or not the extra happens to be installed.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 import pytest
 
@@ -32,11 +35,16 @@ def _bare_client(database: str | None) -> RealSnowflakeClient:
 
 def test_module_imports_without_the_connector() -> None:
     # The lazy-import guarantee: loading the module (as the CLI factory does) must never
-    # require the SDK; only constructing a live client does.
+    # require the SDK; only constructing a live client does. What actually enforces this is
+    # CI installing only [dev]: with the extra absent, a top-level SDK import would break this
+    # file's own imports at collection. This is the readable statement of the rule.
     import dbt_debt.consumption.snowflake  # noqa: F401
 
 
-def test_missing_connector_reads_as_a_friendly_warehouse_error() -> None:
+def test_missing_connector_reads_as_a_friendly_warehouse_error(
+    without_connector: Callable[[str], None],
+) -> None:
+    without_connector("snowflake.connector")
     with pytest.raises(WarehouseError, match=r"dbt-debt\[snowflake\]"):
         RealSnowflakeClient(Config(warehouse="snowflake"))
 

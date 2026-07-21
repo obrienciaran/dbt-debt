@@ -7,12 +7,19 @@ from pathlib import Path
 from dbt_debt.artifacts.catalog import load_catalog
 from dbt_debt.artifacts.manifest import load_manifest
 from dbt_debt.domain import ColumnEdge
+from dbt_debt.lineage.base import LineageSource
 from dbt_debt.lineage.sqlglot_source import SqlglotLineage
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 STG = "model.jaffle_shop.stg_orders"
 FCT = "model.jaffle_shop.fct_orders"
+
+
+def test_sqlglot_source_satisfies_the_lineage_seam() -> None:
+    # `LineageSource` is the seam a second lineage source would plug into; nothing else
+    # references it, so this is what keeps the baseline conforming.
+    assert issubclass(SqlglotLineage, LineageSource)
 
 
 def test_edges_are_model_to_model_only() -> None:

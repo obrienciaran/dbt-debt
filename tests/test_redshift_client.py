@@ -31,7 +31,9 @@ def _bare_client(database: str | None) -> RealRedshiftClient:
 
 def test_module_imports_without_the_connector() -> None:
     # The lazy-import guarantee: loading the module (as the CLI factory does) must never
-    # require the SDK; only constructing a live client does.
+    # require the SDK; only constructing a live client does. What actually enforces this is
+    # CI installing only [dev]: with the extra absent, a top-level SDK import would break this
+    # file's own imports at collection. This is the readable statement of the rule.
     import dbt_debt.consumption.redshift  # noqa: F401
 
 

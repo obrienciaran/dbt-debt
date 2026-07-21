@@ -37,7 +37,7 @@ Issues = "https://github.com/obrienciaran/dbt-debt/issues"
 snowflake = ["snowflake-connector-python>=3.0"]
 redshift = ["redshift-connector>=2.1"]
 databricks = ["databricks-sql-connector>=3.0"]
-dev = ["pytest>=8.0", "mypy>=1.8", "ruff>=0.4"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "mypy>=1.8", "ruff>=0.4"]
 
 [project.scripts]
 dbt-debt = "dbt_debt.cli:main"
@@ -73,3 +73,15 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+# Coverage is opt-in via --cov so the documented local command stays fast; CI passes the flags.
+[tool.coverage.run]
+source = ["dbt_debt"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]

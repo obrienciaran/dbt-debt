@@ -1,5 +1,9 @@
 # 🧹 dbt-debt
 
+[![CI](https://github.com/obrienciaran/dbt-debt/actions/workflows/ci.yml/badge.svg)](https://github.com/obrienciaran/dbt-debt/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/obrienciaran/dbt-debt/branch/main/graph/badge.svg)](https://codecov.io/gh/obrienciaran/dbt-debt)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 ### dbt-debt finds the dead weight in a dbt project on BigQuery, Snowflake, Redshift, and Databricks.
 
 Which models and columns nobody uses anymore, which are barely used, which are safe to remove, and

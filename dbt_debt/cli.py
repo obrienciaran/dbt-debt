@@ -13,6 +13,7 @@ import argparse
 import os
 import sys
 from collections import Counter
+from contextlib import suppress
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -396,6 +397,11 @@ def _run_scan(args: argparse.Namespace) -> int:
     if config.lookback_days < 1:
         print("--lookback-days must be at least 1.", file=sys.stderr)
         return 2
+    # A negative slice bound would silently drop entries from the *end* of every summary list
+    # while the "Top N of M" label presented the cut as intentional.
+    if config.top_n < 0:
+        print("--top-n cannot be negative.", file=sys.stderr)
+        return 2
     if args.clear_cache:
         _clear_project_cache(config.project_dir)
     if not config.manifest_path.exists():
@@ -693,6 +699,13 @@ def main(argv: list[str] | None = None) -> int:
         # so a plain message and the shell's interrupt code are all that's left to do.
         print("interrupted", file=sys.stderr)
         return 130
+    except BrokenPipeError:
+        # The reader went away mid-report (`dbt-debt scan --print | head`), the normal end of
+        # a truncating pipe, not a failure. Point stdout at devnull so the interpreter's
+        # shutdown flush of the broken stream cannot raise a second time.
+        with suppress(OSError, ValueError):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0
 
 
 if __name__ == "__main__":

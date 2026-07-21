@@ -59,6 +59,23 @@ Each phrase carries its own verb because the subjects differ in number: "SYS vie
 "INFORMATION_SCHEMA.JOBS retains".
 """
 
+_ORPHAN_SKIP_GRANTS: dict[str, str] = {
+    "bigquery": "bigquery.tables.list (roles/bigquery.metadataViewer)",
+    "snowflake": "USAGE on the database and its managed schemas",
+    "redshift": "USAGE on the managed schemas",
+    "databricks": "SELECT on system.information_schema.tables",
+}
+"""The grant a skipped orphan check needs, keyed by warehouse; named in the skip lines.
+
+The one-line report form of the CLI's stderr skip messages, so a Snowflake scan never tells
+the reader to fetch a BigQuery grant.
+"""
+
+
+def _orphan_skip_grant(warehouse: str) -> str:
+    return _ORPHAN_SKIP_GRANTS.get(warehouse, "read access to the warehouse table metadata")
+
+
 _UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
 
@@ -180,7 +197,7 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
             f"  ! {_plural(count, 'documented column')} no longer {verb} in the table",
         ]
     if scorecard.orphans is not None:
-        lines += _orphan_summary_lines(scorecard.orphans)
+        lines += _orphan_summary_lines(scorecard.orphans, scorecard.warehouse)
     if scorecard.coverage is not None:
         lines += _coverage_lines(scorecard.coverage)
 
@@ -337,7 +354,7 @@ def _detail_section(scorecard: Scorecard) -> list[str]:
     if scorecard.phantom_columns:
         lines += _detail_phantom_columns(scorecard.phantom_columns)
     if scorecard.orphans is not None:
-        lines += _detail_orphans(scorecard.orphans)
+        lines += _detail_orphans(scorecard.orphans, scorecard.warehouse)
     if scorecard.affected_semantic:
         lines += _detail_affected_semantic(scorecard.affected_semantic)
     if scorecard.removable_tests:
@@ -461,7 +478,7 @@ def _coverage_lines(cov: Coverage) -> list[str]:
     return lines
 
 
-def _orphan_summary_lines(orphans: OrphanReport) -> list[str]:
+def _orphan_summary_lines(orphans: OrphanReport, warehouse: str) -> list[str]:
     """The summary `Orphans:` block: count of orphaned relations and undeclared sources."""
 
     lines = ["Orphans:"]
@@ -471,16 +488,14 @@ def _orphan_summary_lines(orphans: OrphanReport) -> list[str]:
         suffix = f" ({queried} still queried directly)" if queried else ""
         lines.append(f"  ✗ {_plural(count, 'table')} in managed datasets with no dbt model{suffix}")
     else:
-        lines.append(
-            "  ⚠ orphan check skipped — needs bigquery.tables.list (roles/bigquery.metadataViewer)"
-        )
+        lines.append(f"  ⚠ orphan check skipped — needs {_orphan_skip_grant(warehouse)}")
     if orphans.undeclared_sources:
         count = len(orphans.undeclared_sources)
         lines.append(f"  ! {_plural(count, 'source')} found but not declared in the manifest")
     return lines
 
 
-def _detail_orphans(orphans: OrphanReport) -> list[str]:
+def _detail_orphans(orphans: OrphanReport, warehouse: str) -> list[str]:
     """The full orphan breakdown in the detail view: orphaned relations, then undeclared sources."""
 
     lines: list[str] = []
@@ -496,7 +511,7 @@ def _detail_orphans(orphans: OrphanReport) -> list[str]:
         if any(r.query_count for r in relations):
             lines.append("  (a queried orphan is still read directly; review before dropping it)")
     else:
-        lines += ["", "Orphaned tables: skipped — needs bigquery.tables.list"]
+        lines += ["", f"Orphaned tables: skipped — needs {_orphan_skip_grant(warehouse)}"]
     if orphans.undeclared_sources:
         sources = orphans.undeclared_sources
         lines += ["", f"Sources found but not declared in the manifest ({len(sources)}):"]
@@ -513,8 +528,8 @@ def render_orphans_text(scorecard: Scorecard) -> str:
     if orphans is None:
         lines.append("Orphan analysis did not run (no dbt-managed datasets).")
         return _strip_controls("\n".join(lines))
-    lines += _orphan_summary_lines(orphans)
-    lines += _detail_orphans(orphans)
+    lines += _orphan_summary_lines(orphans, scorecard.warehouse)
+    lines += _detail_orphans(orphans, scorecard.warehouse)
     return _strip_controls("\n".join(lines))
 
 

@@ -24,7 +24,7 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 from sqlglot.lineage import lineage
 from sqlglot.optimizer.qualify import qualify
-from sqlglot.optimizer.scope import traverse_scope
+from sqlglot.optimizer.scope import build_scope, traverse_scope
 
 # A sqlglot nested schema: {catalog: {database: {table: {column: type}}}}. Typed loosely because
 # sqlglot's `qualify` takes `dict[str, object]` and dict is invariant in its value type.
@@ -72,14 +72,36 @@ def column_lineage_edges(
 ) -> list[tuple[str, str, str]]:
     """For each output column, the upstream (relation_key, column, output_column) it derives from.
 
-    Output columns that cannot be traced are skipped individually so one odd column does not
-    discard a whole model's lineage.
+    The SQL is parsed and qualified once and the resulting scope shared across the per-column
+    `lineage` calls, which would otherwise each re-parse and re-qualify the whole model. The
+    qualify flags mirror the ones `lineage` applies internally, so sharing changes nothing but
+    the cost. Output columns that cannot be traced are still skipped individually so one odd
+    column does not discard a whole model's lineage; SQL that cannot be parsed or scoped at all
+    (it would have failed for every column) yields no edges.
     """
 
     edges: list[tuple[str, str, str]] = []
+    try:
+        qualified = qualify(
+            sqlglot.parse_one(sql, dialect=dialect),
+            dialect=dialect,
+            schema=schema,
+            validate_qualify_columns=False,
+            identify=False,
+        )
+        scope = build_scope(qualified)
+    except (SqlglotError, KeyError, ValueError):
+        return edges
+    if scope is None:
+        return edges
     for output in output_columns:
         try:
-            node = lineage(output, sql, schema=schema, dialect=dialect)
+            # With a scope supplied, `lineage` skips its own parse and qualify; `copy=False`
+            # also skips the defensive tree copy on sqlglot versions that take it, and lands
+            # harmlessly in **kwargs (unused once a scope is given) on older ones.
+            node = lineage(
+                output, qualified, schema=schema, dialect=dialect, scope=scope, copy=False
+            )
         except (SqlglotError, KeyError, ValueError):
             continue
         for leaf in node.walk():

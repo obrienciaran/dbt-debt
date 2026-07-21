@@ -534,12 +534,13 @@ def test_render_text_detail_lists_dead_models() -> None:
     assert "  - stg  models/stg.sql" in out
 
 
-def _orphan_card(checked: bool = True) -> Scorecard:
+def _orphan_card(checked: bool = True, warehouse: str = "bigquery") -> Scorecard:
     return Scorecard(
         project_name="jaffle_shop",
         lookback_days=180,
         active_models=1,
         unused_models=0,
+        warehouse=warehouse,
         orphans=OrphanReport(
             orphaned_relations=(OrphanedRelation("p.d.tmp_old", "BASE TABLE"),),
             undeclared_sources=("p.raw.events",),
@@ -614,6 +615,26 @@ def test_render_text_orphan_skipped_when_metadata_unreadable() -> None:
     assert "orphan check skipped — needs bigquery.tables.list" in out
     # Undeclared sources are still reported even when the orphan listing was skipped.
     assert "1 source found but not declared" in out
+
+
+def test_orphan_skip_wording_names_each_warehouse_grant() -> None:
+    # A skipped orphan check names the scanned warehouse's own grant, in the summary line and
+    # the detail line both; only a BigQuery reader is pointed at bigquery.tables.list.
+    grants = {
+        "bigquery": "bigquery.tables.list (roles/bigquery.metadataViewer)",
+        "snowflake": "USAGE on the database and its managed schemas",
+        "redshift": "USAGE on the managed schemas",
+        "databricks": "SELECT on system.information_schema.tables",
+    }
+    for warehouse, grant in grants.items():
+        out = render_text(_orphan_card(checked=False, warehouse=warehouse), detail=True)
+        assert f"  ⚠ orphan check skipped — needs {grant}" in out
+        assert f"Orphaned tables: skipped — needs {grant}" in out
+        if warehouse != "bigquery":
+            assert "bigquery.tables.list" not in out
+    # The focused --orphans report goes through the same helpers and follows the warehouse too.
+    focused = render_orphans_text(_orphan_card(checked=False, warehouse="redshift"))
+    assert "needs USAGE on the managed schemas" in focused
 
 
 def test_render_text_detail_lists_orphans_and_sources() -> None:

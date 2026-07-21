@@ -99,3 +99,15 @@ def test_lineage_traces_output_columns_through_a_cte() -> None:
         ("p.d.stg_orders", "order_id", "order_id"),
         ("p.d.stg_orders", "amount", "net_amount"),
     }
+
+
+def test_lineage_skips_untraceable_columns_individually() -> None:
+    # A column the query does not produce (a stale catalog can list one) is skipped without
+    # discarding the lineage of the columns that do trace.
+    sql = "SELECT order_id FROM p.d.stg_orders"
+    edges = column_lineage_edges(sql, ["order_id", "ghost"], SCHEMA)
+    assert edges == [("p.d.stg_orders", "order_id", "order_id")]
+
+
+def test_lineage_yields_no_edges_for_unparseable_sql() -> None:
+    assert column_lineage_edges("this is not sql ((", ["order_id"], SCHEMA) == []

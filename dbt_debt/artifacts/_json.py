@@ -31,6 +31,12 @@ def load_artifact(path: str | Path) -> dict[str, Any]:
         data = json.loads(Path(path).read_text())
     except OSError as exc:
         raise ArtifactError(f"cannot read {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        # A file truncated mid-multibyte-character decodes before it parses, so this surfaces
+        # separately from JSONDecodeError.
+        raise ArtifactError(
+            f"{path} is not valid UTF-8 ({exc}) — re-run dbt to rebuild it."
+        ) from exc
     except json.JSONDecodeError as exc:
         raise ArtifactError(
             f"{path} is not valid JSON ({exc}) — re-run dbt to rebuild it."

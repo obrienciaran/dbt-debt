@@ -254,6 +254,15 @@ def test_non_object_manifest_raises_artifact_error(tmp_path: Path) -> None:
         load_manifest(path)
 
 
+def test_invalid_utf8_manifest_raises_artifact_error(tmp_path: Path) -> None:
+    # A file truncated mid-multibyte-character fails to decode before JSON parsing starts,
+    # and must fail with the path rather than a UnicodeDecodeError traceback.
+    path = tmp_path / "manifest.json"
+    path.write_bytes(b'{"metadata": \xff}')
+    with pytest.raises(ArtifactError, match="not valid UTF-8"):
+        load_manifest(path)
+
+
 def test_missing_manifest_raises_artifact_error(tmp_path: Path) -> None:
     with pytest.raises(ArtifactError, match="cannot read"):
         load_manifest(tmp_path / "absent.json")

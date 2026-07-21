@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -117,6 +119,13 @@ def test_lookback_days_must_be_positive(capsys: pytest.CaptureFixture[str]) -> N
     assert "--lookback-days" in capsys.readouterr().err
 
 
+def test_top_n_cannot_be_negative(capsys: pytest.CaptureFixture[str]) -> None:
+    # A negative slice bound would silently drop entries from the end of every summary list
+    # under a "Top N of M" label that presents the cut as intentional.
+    assert main(["scan", "--top-n", "-1"]) == 2
+    assert "--top-n" in capsys.readouterr().err
+
+
 def test_redshift_caps_the_lookback_window_at_its_retention() -> None:
     # Redshift's SYS views keep far less than the 180-day default, so the report must not claim
     # a window the warehouse cannot answer for.
@@ -202,6 +211,19 @@ def test_keyboard_interrupt_exits_130(
     monkeypatch.setattr(cli, "_run_scan", _interrupted)
     assert main(["scan"]) == 130
     assert "interrupted" in capsys.readouterr().err
+
+
+def test_broken_pipe_is_a_clean_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `dbt-debt scan --print | head` closes stdout early; the scan finished, so the run ends
+    # cleanly instead of with a traceback.
+    def _broken(args: object) -> int:
+        raise BrokenPipeError
+
+    monkeypatch.setattr(cli, "_run_scan", _broken)
+    # A StringIO stands in for the broken stream: its fileno() refusal keeps the handler's
+    # devnull redirect away from the test harness's real stdout.
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    assert main(["scan"]) == 0
 
 
 def test_malformed_catalog_degrades_to_no_catalog(

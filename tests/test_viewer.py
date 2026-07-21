@@ -8,7 +8,9 @@ which is false under pytest's non-TTY stdout) is covered here.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -200,3 +202,279 @@ def test_should_view_is_false_for_explicit_output_intent() -> None:
     assert _should_view(text, _args(print_report=True)) is False
     assert _should_view(text, _args(orphans=True)) is False
     assert _should_view(json_fmt, _args()) is False
+
+
+def test_should_view_consults_the_terminal_when_intent_is_plain() -> None:
+    # With no competing output flag the decision falls to the terminal itself, which under
+    # pytest is not a TTY.
+    assert _should_view(Config(output_format="text"), _args()) is False
+
+
+class _TTY:
+    """A stand-in stream that claims to be a terminal."""
+
+    def __init__(self, fd: int = 0) -> None:
+        self._fd = fd
+
+    def isatty(self) -> bool:
+        return True
+
+    def fileno(self) -> int:
+        return self._fd
+
+
+def test_interactive_supported_true_on_a_unix_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dbt_debt.report import viewer
+
+    monkeypatch.setattr(sys, "stdin", _TTY())
+    monkeypatch.setattr(sys, "stdout", _TTY())
+    # On a POSIX platform the answer is whether the termios backend imported.
+    assert viewer.interactive_supported() is viewer._HAS_TERMIOS
+
+
+def test_interactive_supported_true_on_a_windows_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dbt_debt.report import viewer
+
+    monkeypatch.setattr(sys, "stdin", _TTY())
+    monkeypatch.setattr(sys, "stdout", _TTY())
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert viewer.interactive_supported() is True
+
+
+class _FakeKernel32:
+    def __init__(self, mode: int = 7, readable: bool = True, settable: bool = True) -> None:
+        self.mode = mode
+        self.readable = readable
+        self.settable = settable
+        self.set_modes: list[int] = []
+
+    def GetStdHandle(self, code: int) -> str:
+        return "handle"
+
+    def GetConsoleMode(self, handle: str, ref: object) -> int:
+        if not self.readable:
+            return 0
+        ref.value = self.mode  # type: ignore[attr-defined]
+        return 1
+
+    def SetConsoleMode(self, handle: str, mode: int) -> int:
+        self.set_modes.append(mode)
+        return 1 if self.settable else 0
+
+
+def _install_ctypes(monkeypatch: pytest.MonkeyPatch, kernel32: _FakeKernel32) -> None:
+    stub = ModuleType("ctypes")
+
+    class _CUint:
+        def __init__(self) -> None:
+            self.value = 0
+
+    stub.c_uint32 = _CUint  # type: ignore[attr-defined]
+    stub.byref = lambda obj: obj  # type: ignore[attr-defined]
+    stub.windll = SimpleNamespace(kernel32=kernel32)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ctypes", stub)
+
+
+def test_windows_vt_is_a_no_op_off_windows() -> None:
+    from dbt_debt.report import viewer
+
+    assert viewer._enable_windows_vt() is False
+    viewer._restore_windows_vt()  # nothing to restore, and must not raise
+
+
+def test_windows_vt_enable_and_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dbt_debt.report import viewer
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    kernel32 = _FakeKernel32(mode=7)
+    _install_ctypes(monkeypatch, kernel32)
+    monkeypatch.setattr(viewer, "_win_prev_mode", None)
+    assert viewer._enable_windows_vt() is True
+    assert kernel32.set_modes[-1] == 7 | 0x0004
+    assert viewer._win_prev_mode == 7
+    viewer._restore_windows_vt()
+    assert kernel32.set_modes[-1] == 7
+
+
+def test_windows_vt_fails_when_the_console_mode_is_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dbt_debt.report import viewer
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    _install_ctypes(monkeypatch, _FakeKernel32(readable=False))
+    assert viewer._enable_windows_vt() is False
+
+
+def test_unix_reader_sets_and_restores_the_terminal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dbt_debt.report import viewer
+
+    saved = ["saved-attrs"]
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        viewer,
+        "termios",
+        SimpleNamespace(
+            tcgetattr=lambda fd: saved,
+            tcsetattr=lambda fd, when, attrs: calls.append(("restore", attrs)),
+            TCSADRAIN="drain",
+        ),
+    )
+    monkeypatch.setattr(
+        viewer, "tty", SimpleNamespace(setcbreak=lambda fd: calls.append(("cbreak", fd)))
+    )
+    monkeypatch.setattr(sys, "stdin", _TTY(fd=5))
+    with viewer._UnixReader():
+        pass
+    out = capsys.readouterr().out
+    assert viewer._ALT_ON in out and viewer._ALT_OFF in out
+    assert ("cbreak", 5) in calls and ("restore", saved) in calls
+
+
+def test_unix_reader_assembles_escape_sequences(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dbt_debt.report import viewer
+
+    reader = viewer._UnixReader.__new__(viewer._UnixReader)
+    reader._fd = 0
+    stream = [b"\x1b", b"[", b"A"]
+    monkeypatch.setattr(viewer, "os", SimpleNamespace(read=lambda fd, n: stream.pop(0)))
+    monkeypatch.setattr(
+        viewer,
+        "select",
+        SimpleNamespace(select=lambda r, w, x, t: (([0] if stream else []), [], [])),
+    )
+    assert reader.read_key() == "up"
+    stream[:] = [b"q"]
+    assert reader.read_key() == "quit"
+    stream[:] = [b"z"]
+    assert reader.read_key() is None
+
+
+def test_windows_reader_refuses_without_vt(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Off Windows (or when the console refuses VT) enabling fails, so entering the reader must
+    # raise the setup error the caller turns into a plain-output fallback.
+    from dbt_debt.report import viewer
+
+    with pytest.raises(viewer._SetupError):
+        with viewer._WindowsReader():
+            pass
+
+
+def test_windows_reader_enters_and_exits_with_vt(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dbt_debt.report import viewer
+
+    restored: list[bool] = []
+    monkeypatch.setattr(viewer, "_enable_windows_vt", lambda: True)
+    monkeypatch.setattr(viewer, "_restore_windows_vt", lambda: restored.append(True))
+    with viewer._WindowsReader():
+        pass
+    assert restored == [True]
+    out = capsys.readouterr().out
+    assert viewer._ALT_ON in out and viewer._ALT_OFF in out
+
+
+def test_windows_reader_read_key_maps_special_and_plain_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dbt_debt.report import viewer
+
+    reader = viewer._WindowsReader()
+    assert reader.read_key() is None  # off Windows there is nothing to read
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    keys = iter(["\xe0", "H", "q"])
+    msvcrt = ModuleType("msvcrt")
+    msvcrt.getwch = lambda: next(keys)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "msvcrt", msvcrt)
+    assert reader.read_key() == "up"
+    assert reader.read_key() == "quit"
+
+
+class _FakeReader:
+    """A reader double for `_terminal`: enters, hands out one key, exits."""
+
+    entered: list[str] = []
+
+    def __enter__(self) -> _FakeReader:
+        _FakeReader.entered.append("enter")
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        _FakeReader.entered.append("exit")
+
+    def read_key(self) -> str | None:
+        return "quit"
+
+
+def test_terminal_uses_the_platform_reader(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dbt_debt.report import viewer
+
+    _FakeReader.entered = []
+    monkeypatch.setattr(viewer, "_UnixReader", _FakeReader)
+    with viewer._terminal() as read_key:
+        assert read_key() == "quit"
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(viewer, "_WindowsReader", _FakeReader)
+    with viewer._terminal() as read_key:
+        assert read_key() == "quit"
+    assert _FakeReader.entered == ["enter", "exit", "enter", "exit"]
+
+
+class _TerminalStub:
+    """Replaces `_terminal` in run_viewer tests: yields a canned key feed or fails setup."""
+
+    def __init__(self, keys: list[str] | None = None, error: Exception | None = None) -> None:
+        self._keys = iter(keys or [])
+        self._error = error
+
+    def __enter__(self) -> object:
+        if self._error:
+            raise self._error
+        return lambda: next(self._keys)
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+def test_run_viewer_runs_the_loop_and_reports_success(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dbt_debt.report import viewer
+
+    monkeypatch.setattr(viewer, "_terminal", lambda: _TerminalStub(keys=["quit"]))
+    assert viewer.run_viewer(_card(), Config()) is True
+    assert "[1] Summary" in capsys.readouterr().out
+
+
+def test_run_viewer_falls_back_when_the_terminal_cannot_be_set_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dbt_debt.report import viewer
+
+    monkeypatch.setattr(viewer, "_terminal", lambda: _TerminalStub(error=viewer._SetupError()))
+    assert viewer.run_viewer(_card(), Config()) is False
+
+
+def test_run_viewer_treats_ctrl_c_as_quit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dbt_debt.report import viewer
+
+    monkeypatch.setattr(viewer, "_terminal", lambda: _TerminalStub(error=KeyboardInterrupt()))
+    assert viewer.run_viewer(_card(), Config()) is True
+
+
+def test_loop_switches_tabs_and_scrolls(capsys: pytest.CaptureFixture[str]) -> None:
+    from dbt_debt.report import viewer
+
+    lines = [f"line {i}" for i in range(50)]
+    keys = iter(
+        ["down", "down", "up", "pgdn", "pgup", "home", "end", None, "tab", "backtab", "quit"]
+    )
+    viewer._loop([("Summary", lines)], "{}", lambda: next(keys))
+    out = capsys.readouterr().out
+    # "end" lands the window on the last row, and tab/backtab cycle through Export and back.
+    assert "line 49" in out
+    assert "Export the full report" in out

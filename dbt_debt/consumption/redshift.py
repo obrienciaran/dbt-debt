@@ -72,7 +72,7 @@ class RealRedshiftClient:
                 password=password,
                 port=int(os.environ.get("REDSHIFT_PORT") or 5439),
             )
-        except redshift_connector.Error as exc:
+        except redshift_connector.Error as exc:  # type: ignore[attr-defined]
             raise MissingCredentialsError(
                 f"Could not connect to Redshift at {host}. {_CREDENTIALS_HINT} ({exc})"
             ) from exc
@@ -199,9 +199,9 @@ class RealRedshiftClient:
                 columns = [str(column[0]).lower() for column in cursor.description or []]
             finally:
                 cursor.close()
-        except redshift_connector.ProgrammingError:
+        except redshift_connector.ProgrammingError:  # type: ignore[attr-defined]
             raise
-        except redshift_connector.Error as exc:
+        except redshift_connector.Error as exc:  # type: ignore[attr-defined]
             raise WarehouseError(f"Redshift query for {stage} failed: {exc}") from exc
         return [
             {column: jobs.as_utc(value) for column, value in zip(columns, row)}
@@ -214,4 +214,4 @@ def _programming_error() -> type[Exception]:
 
     import redshift_connector
 
-    return cast("type[Exception]", redshift_connector.ProgrammingError)
+    return cast("type[Exception]", redshift_connector.ProgrammingError)  # type: ignore[attr-defined]

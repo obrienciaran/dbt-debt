@@ -480,3 +480,186 @@ def test_databricks_factory_is_lazy_and_selected(
         lambda config, database=None: expected,
     )
     assert _make_client(Config(warehouse="databricks"), "main") is expected
+
+
+def _write_scannable_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A one-model manifest plus a faked BigQuery client, for full end-to-end scans."""
+
+    from tests.fakes import FakeWarehouseClient
+
+    _write_manifest(
+        tmp_path,
+        nodes={
+            "model.p.m": {
+                "resource_type": "model",
+                "name": "m",
+                "database": "proj",
+                "schema": "mart",
+                "alias": "m",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "dbt_debt.consumption.bigquery.RealBigQueryClient",
+        lambda config, project=None: FakeWarehouseClient(),
+    )
+
+
+def test_scan_prints_the_text_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_scannable_project(tmp_path, monkeypatch)
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache", "--print"]) == 0
+    assert "dbt-debt scorecard" in capsys.readouterr().out
+
+
+def test_scan_json_format_emits_valid_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_scannable_project(tmp_path, monkeypatch)
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache", "--format", "json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["project_name"] == "p"
+
+
+def test_scan_orphans_report_in_both_formats(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_scannable_project(tmp_path, monkeypatch)
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache", "--orphans"]) == 0
+    assert "dbt-debt orphans" in capsys.readouterr().out
+    assert (
+        main(
+            [
+                "scan",
+                "--project-dir",
+                str(tmp_path),
+                "--no-cache",
+                "--orphans",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    json.loads(capsys.readouterr().out)
+
+
+def test_scan_writes_the_report_to_an_output_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_scannable_project(tmp_path, monkeypatch)
+    out_file = tmp_path / "debt.json"
+    argv = ["scan", "--project-dir", str(tmp_path), "--no-cache", "--format", "json"]
+    assert main([*argv, "-o", str(out_file)]) == 0
+    json.loads(out_file.read_text())
+    assert "wrote report" in capsys.readouterr().err
+
+
+def test_databricks_rejects_a_quoted_comment_pattern(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Valid as a regex, but Databricks SQL cannot carry the quote safely, so the scan must
+    # stop before any connection with a clear message.
+    manifest = {
+        "metadata": {**_METADATA, "adapter_type": "databricks"},
+        "nodes": {"model.p.m": {"resource_type": "model", "name": "m", "schema": "s"}},
+    }
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "manifest.json").write_text(json.dumps(manifest))
+    argv = ["scan", "--project-dir", str(tmp_path), "--no-cache"]
+    assert main([*argv, "--query-comment-pattern", "d'bt"]) == 2
+    assert "single quote" in capsys.readouterr().err
+
+
+def test_region_flag_warns_off_bigquery(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    without_connector: Callable[[str], None],
+) -> None:
+    # The warning is written before the client is built, so hiding the connector keeps the
+    # scan from reaching a live account without touching the assertion.
+    without_connector("snowflake.connector")
+    err = _scan_stderr(tmp_path, capsys, "snowflake", "--region", "EU")
+    assert "--region only applies to BigQuery" in err
+
+
+def test_load_catalog_returns_none_when_absent(tmp_path: Path) -> None:
+    from dbt_debt.cli import _load_catalog
+    from dbt_debt.config import Config
+
+    assert _load_catalog(Config(project_dir=tmp_path)) is None
+
+
+def test_storage_bytes_without_a_catalog_is_empty() -> None:
+    from dbt_debt.cli import _storage_bytes
+
+    assert _storage_bytes(None) == {}
+
+
+def test_columns_without_a_catalog_fall_back_to_model_level(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from dbt_debt.cli import _column_report
+    from dbt_debt.config import Config
+    from tests.fakes import FakeWarehouseClient
+
+    report = _column_report(
+        Config(columns=True), FakeWarehouseClient(), _manifest_for("bigquery"), None, {}
+    )
+    assert report is None
+    assert "dbt docs generate" in capsys.readouterr().err
+
+
+def test_metadata_helpers_step_aside_without_datasets() -> None:
+    # A manifest with no models has no managed or source datasets, so both optional metadata
+    # reads skip without touching the client.
+    from dbt_debt.cli import _existing_relations, _source_last_modified
+    from tests.fakes import FakeWarehouseClient
+
+    client = FakeWarehouseClient()
+    assert _existing_relations(client, _manifest_for("bigquery"), "bigquery") is None
+    assert _source_last_modified(client, _manifest_for("bigquery")) is None
+    assert client.calls["existing_relations"] == 0
+    assert client.calls["source_last_modified"] == 0
+
+
+def test_scan_opens_the_viewer_when_the_terminal_allows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With no competing output intent and a drivable terminal, the viewer handles the report
+    # and the scan exits 0 without printing it again.
+    _write_scannable_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "_should_view", lambda config, args: True)
+    shown: list[bool] = []
+    monkeypatch.setattr(
+        "dbt_debt.report.viewer.run_viewer",
+        lambda scorecard, config: shown.append(True) or True,
+    )
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache"]) == 0
+    assert shown == [True]
+
+
+def test_scan_falls_back_to_plain_output_when_the_viewer_declines(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # run_viewer returns False when the terminal cannot be set up; the report must still
+    # reach stdout so every environment gets it.
+    _write_scannable_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "_should_view", lambda config, args: True)
+    monkeypatch.setattr("dbt_debt.report.viewer.run_viewer", lambda scorecard, config: False)
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache"]) == 0
+    assert "dbt-debt scorecard" in capsys.readouterr().out
+
+
+def test_top_level_clear_cache_continues_into_the_scan(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With a command following, --clear-cache clears and then runs it (here failing on the
+    # missing manifest) instead of exiting early.
+    cleared: list[bool] = []
+    monkeypatch.setattr(cli, "_clear_all_cache", lambda: cleared.append(True))
+    assert main(["--clear-cache", "scan", "--project-dir", str(tmp_path)]) == 2
+    assert cleared == [True]
+    assert "manifest not found" in capsys.readouterr().err

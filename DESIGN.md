@@ -35,9 +35,10 @@ dbt_debt/
   consumption/           # ask the warehouse what was actually used
     client.py            # WarehouseClient, the shared interface the rest of the code talks to
                          #   (so it can be faked in tests); one implementation per warehouse
-    bigquery.py          # the BigQuery version (the only file that imports the BigQuery library)
+    bigquery.py          # the BigQuery version (the only file that imports the BigQuery
+                         #   library, an optional extra like every warehouse SDK)
     snowflake.py         # the Snowflake version (the only file that imports the connector,
-                         #   which is an optional extra; see the Snowflake section)
+                         #   also an optional extra; see the Snowflake section)
     redshift.py          # the Redshift version (the only file that imports redshift-connector,
                          #   also an optional extra; see the Redshift section)
     databricks.py        # the Databricks version (the only file that imports the SQL connector,
@@ -118,6 +119,12 @@ query.
 | Which **columns** a query touched | read the query text and parse it with `sqlglot` |
 | Which **tables exist** in a dataset | ask each dbt-managed dataset for its own table list |
 | The full column list and table sizes | `catalog.json` (from `dbt docs generate`) |
+
+The BigQuery library (`google-cloud-bigquery`) is the `[bigquery]` optional extra (*decided
+2026-07-21*): every warehouse SDK is an extra, so the base install carries no warehouse
+packages and a Snowflake, Redshift, or Databricks user never installs anything
+BigQuery-related. A BigQuery scan without it stops with the install hint, the same behaviour
+the other warehouses already had.
 
 BigQuery's query log only covers the project you query it in, and keeps roughly 180 days of
 history, which is also the default window, so `WAREHOUSE_RETENTION_DAYS` only bites here on an

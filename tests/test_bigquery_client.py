@@ -1,15 +1,21 @@
 """Tests for the real BigQuery client's preflight behaviour.
 
 These bypass `__init__` (which would need live credentials) and inject a stub job handle, so
-they exercise the client's own error handling without touching BigQuery.
+they exercise the client's own error handling without touching BigQuery. The SDK is an
+optional extra, so these tests must hold without it: when it is absent, stub exception modules
+are registered under the real names. The client imports the exception classes lazily at call
+time, so the classes it catches and the classes these tests raise stay the same objects,
+however the environment is set up.
 """
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Callable
+from types import ModuleType
 from typing import Any
 
 import pytest
-from google.api_core.exceptions import Forbidden
 
 from dbt_debt.config import Config
 from dbt_debt.consumption.bigquery import RealBigQueryClient
@@ -19,6 +25,32 @@ from dbt_debt.consumption.client import (
     MissingPermissionError,
     WarehouseError,
 )
+
+try:
+    from google.api_core.exceptions import BadRequest, Forbidden
+except ModuleNotFoundError:
+
+    class _GoogleAPIError(Exception):
+        pass
+
+    class _Forbidden(_GoogleAPIError):
+        pass
+
+    class _BadRequest(_GoogleAPIError):
+        pass
+
+    _exceptions = ModuleType("google.api_core.exceptions")
+    _exceptions.GoogleAPIError = _GoogleAPIError  # type: ignore[attr-defined]
+    _exceptions.Forbidden = _Forbidden  # type: ignore[attr-defined]
+    _exceptions.BadRequest = _BadRequest  # type: ignore[attr-defined]
+    _api_core = ModuleType("google.api_core")
+    _api_core.exceptions = _exceptions  # type: ignore[attr-defined]
+    _google = ModuleType("google")
+    _google.api_core = _api_core  # type: ignore[attr-defined]
+    sys.modules.setdefault("google", _google)
+    sys.modules.setdefault("google.api_core", _api_core)
+    sys.modules["google.api_core.exceptions"] = _exceptions
+    BadRequest, Forbidden = _BadRequest, _Forbidden
 
 
 class _RaisingBQ:
@@ -72,9 +104,21 @@ class _BadRequestBQ:
     """Stub whose query fails the way a wrong --region does."""
 
     def query(self, sql: str) -> Any:
-        from google.api_core.exceptions import BadRequest
-
         raise BadRequest("Unrecognized region")
+
+
+def test_module_imports_without_the_sdk() -> None:
+    # The lazy-import guarantee: loading the module (as the CLI factory does) must never
+    # require the SDK; only constructing a live client does.
+    import dbt_debt.consumption.bigquery  # noqa: F401
+
+
+def test_missing_sdk_reads_as_a_friendly_warehouse_error(
+    without_package: Callable[[str], None],
+) -> None:
+    without_package("google")
+    with pytest.raises(WarehouseError, match=r"dbt-debt\[bigquery\]"):
+        RealBigQueryClient(Config())
 
 
 def test_non_permission_api_error_becomes_warehouse_error() -> None:

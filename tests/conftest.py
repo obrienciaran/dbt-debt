@@ -7,8 +7,10 @@ behaviour therefore simulate the absence instead of relying on it, so they hold 
 
 from __future__ import annotations
 
+import builtins
 import sys
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -24,5 +26,29 @@ def without_connector(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], None]:
 
     def hide(name: str) -> None:
         monkeypatch.setitem(sys.modules, name, None)
+
+    return hide
+
+
+@pytest.fixture
+def without_package(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], None]:
+    """Make importing `<name>` or any of its submodules raise, however the environment is set up.
+
+    `without_connector`'s `sys.modules` entry is enough for a plain module, but not for the
+    google SDK: `google` is a namespace package, and once the real SDK has been imported its
+    cached parents carry the submodule attributes, so `from google.cloud import bigquery` can
+    succeed without consulting `sys.modules` for the hidden leaf. Failing the import call
+    itself holds either way.
+    """
+
+    def hide(name: str) -> None:
+        original_import = builtins.__import__
+
+        def missing(module: str, *args: Any, **kwargs: Any) -> Any:
+            if module == name or module.startswith(name + "."):
+                raise ModuleNotFoundError(f"No module named {module!r}", name=module)
+            return original_import(module, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", missing)
 
     return hide

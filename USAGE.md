@@ -144,8 +144,9 @@ at the end of your pipeline.
 
 ### BigQuery
 
-dbt-debt signs in the same way `gcloud` does (`gcloud auth application-default login`) and runs
-in the project your models live in (read from your project, or set with `--project`).
+Install the optional BigQuery dependency (`pip install 'dbt-debt[bigquery]'`). dbt-debt signs
+in the same way `gcloud` does (`gcloud auth application-default login`) and runs in the
+project your models live in (read from your project, or set with `--project`).
 
 - **Required.** Permission to see everyone's queries, not just your own
   (`bigquery.jobs.listAll`, part of `roles/bigquery.resourceViewer`). dbt-debt checks this up
@@ -412,6 +413,7 @@ ruff check . && ruff format --check . && mypy dbt_debt
 ```
 
 The tests run on small sample dbt files with a stand-in for the warehouse, so they need no
-cloud access and no credentials. To exercise the optional Databricks import locally, install both
-extras with `pip install -e '.[dev,databricks]'`. For how the code is put together, see
+cloud access, no credentials, and no warehouse SDK: every SDK is an optional extra, absent
+from the dev environment. To exercise one locally (a live scan against a demo project), add
+its extra, e.g. `pip install -e '.[dev,bigquery]'`. For how the code is put together, see
 [`DESIGN.md`](DESIGN.md).

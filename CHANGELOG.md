@@ -6,6 +6,14 @@ All notable changes to this project are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Changed
+
+- **The BigQuery library is now the `[bigquery]` optional extra, like every other warehouse
+  SDK.** `pip install dbt-debt` no longer pulls in `google-cloud-bigquery`, so no user
+  installs packages for a warehouse they don't use; install the extra matching yours, e.g.
+  `pip install "dbt-debt[bigquery]"`. A BigQuery scan without it stops with the install hint
+  (exit 3), the same behaviour the other warehouses already had.
+
 ## [0.1.0] - 2026-07-21
 
 ### Added

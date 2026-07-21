@@ -278,6 +278,25 @@ def test_snowflake_scan_without_the_connector_exits_three(
     assert "dbt-debt[snowflake]" in capsys.readouterr().err
 
 
+def test_bigquery_scan_without_the_sdk_exits_three(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    without_package: Callable[[str], None],
+) -> None:
+    # Same isolation proof for the BigQuery extra: the SDK is only reached for the selected
+    # warehouse, and its absence is a readable exit 3 with the install hint.
+    without_package("google")
+    manifest = {
+        "metadata": {**_METADATA, "adapter_type": "bigquery"},
+        "nodes": {"model.p.m": {"resource_type": "model", "name": "m", "schema": "s"}},
+    }
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "manifest.json").write_text(json.dumps(manifest))
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache"]) == 3
+    assert "dbt-debt[bigquery]" in capsys.readouterr().err
+
+
 def test_redshift_scan_without_the_connector_exits_three(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

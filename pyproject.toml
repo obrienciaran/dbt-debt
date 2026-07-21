@@ -24,7 +24,6 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "google-cloud-bigquery>=3.0",
     "sqlglot>=23.0",
 ]
 
@@ -34,6 +33,7 @@ Repository = "https://github.com/obrienciaran/dbt-debt"
 Issues = "https://github.com/obrienciaran/dbt-debt/issues"
 
 [project.optional-dependencies]
+bigquery = ["google-cloud-bigquery>=3.0"]
 snowflake = ["snowflake-connector-python>=3.0"]
 redshift = ["redshift-connector>=2.1"]
 databricks = ["databricks-sql-connector>=3.0"]
@@ -56,11 +56,13 @@ quote-style = "double"
 python_version = "3.10"
 strict = true
 
-# The Snowflake and Redshift connectors are optional extras and intentionally absent from the
-# dev environment (the isolation invariant, the suite runs with no warehouse SDK exercised),
-# so their lazy imports type-check as Any rather than failing the strict run.
+# Every warehouse SDK is an optional extra and intentionally absent from the dev environment
+# (the isolation invariant, the suite runs with no warehouse SDK exercised), so their lazy
+# imports type-check as Any rather than failing the strict run.
 [[tool.mypy.overrides]]
 module = [
+    "google",
+    "google.*",
     "snowflake",
     "snowflake.*",
     "redshift_connector",

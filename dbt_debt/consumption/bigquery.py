@@ -2,7 +2,7 @@
 
 It composes the pure SQL builders/parsers in `jobs` with a live client. Imports are lazy so the
 rest of the package (and the test suite, via the fake) loads without the BigQuery dependency or
-any credentials.
+any credentials. The library is an optional extra (`pip install 'dbt-debt[bigquery]'`).
 """
 
 from __future__ import annotations
@@ -27,8 +27,14 @@ class RealBigQueryClient:
     """Live BigQuery client implementing the `WarehouseClient` Protocol."""
 
     def __init__(self, config: Config, project: str | None = None) -> None:
-        from google.auth.exceptions import DefaultCredentialsError
-        from google.cloud import bigquery
+        try:
+            from google.auth.exceptions import DefaultCredentialsError
+            from google.cloud import bigquery
+        except ModuleNotFoundError as exc:
+            raise WarehouseError(
+                "BigQuery support needs the optional google-cloud-bigquery dependency; install "
+                "it with `pip install 'dbt-debt[bigquery]'`."
+            ) from exc
 
         self._config = config
         try:

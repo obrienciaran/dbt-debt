@@ -175,22 +175,22 @@ Redshift hits this at the default, so "unused" there means unused in the last we
 
 ## 📦 Installing it
 
-From [PyPI](https://pypi.org/project/dbt-debt/) (needs Python 3.10+):
+From [PyPI](https://pypi.org/project/dbt-debt/) (needs Python 3.10+), with the extra matching
+your warehouse:
 
 ```
-pip install dbt-debt
+pip install "dbt-debt[bigquery]"    # or [snowflake], [redshift], [databricks]
 ```
 
-or with uv, as a project dependency (`uv add dbt-debt`), a standalone tool
-(`uv tool install dbt-debt`), or run it without installing:
+or with uv, as a project dependency (`uv add "dbt-debt[bigquery]"`), a standalone tool
+(`uv tool install "dbt-debt[bigquery]"`), or run it without installing:
 
 ```
-uvx dbt-debt scan
+uvx --from "dbt-debt[bigquery]" dbt-debt scan
 ```
 
-BigQuery support is built in. For Snowflake, Redshift, or Databricks, add the matching extra:
-`pip install "dbt-debt[snowflake]"`, `pip install "dbt-debt[redshift]"`, or
-`pip install "dbt-debt[databricks]"`.
+Every warehouse SDK is an optional extra, so you never install packages for a warehouse you
+don't use. A scan whose warehouse extra is missing stops with the `pip install` line to run.
 
 (For warehouse connection setup, required permissions, and Databricks preview limitations, see
 [`USAGE.md`](USAGE.md).)

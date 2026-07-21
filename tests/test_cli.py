@@ -64,6 +64,17 @@ def test_stale_source_days_reaches_the_config() -> None:
     assert _config_from_args(_build_parser().parse_args(["scan"])).stale_source_days == 30
 
 
+def test_every_warehouse_has_a_specific_orphan_skip_message() -> None:
+    # The generic fallback names no grant and gives the reader nothing to act on, so it must
+    # only ever fire for a warehouse we don't know about.
+    from dbt_debt.config import SUPPORTED_WAREHOUSES
+
+    for warehouse in SUPPORTED_WAREHOUSES:
+        message = cli._ORPHAN_INVENTORY_SKIP_MESSAGES[warehouse]
+        assert "need " in message
+        assert "Undeclared sources are still reported." in message
+
+
 def test_min_age_zero_skips_the_first_seen_call() -> None:
     from dbt_debt.cli import _scan
     from dbt_debt.config import Config

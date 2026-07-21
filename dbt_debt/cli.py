@@ -51,6 +51,16 @@ _ORPHAN_INVENTORY_SKIP_MESSAGES: dict[str, str] = {
         "roles/bigquery.metadataViewer or dataViewer); skipping orphaned-relation discovery. "
         "Undeclared sources are still reported."
     ),
+    "snowflake": (
+        "Could not read table metadata for the managed schemas (need USAGE on the database and "
+        "its managed schemas; INFORMATION_SCHEMA.TABLES only shows objects the role can "
+        "access); skipping orphaned-relation discovery. Undeclared sources are still reported."
+    ),
+    "redshift": (
+        "Could not read table metadata for the managed schemas (need USAGE on the managed "
+        "schemas; SVV_REDSHIFT_TABLES only shows tables the user can access); skipping "
+        "orphaned-relation discovery. Undeclared sources are still reported."
+    ),
     "databricks": (
         "Could not read table metadata for the managed schemas (need SELECT on "
         "system.information_schema.tables for the catalog schemas, or pass --project with the "

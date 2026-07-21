@@ -120,8 +120,9 @@ query.
 | The full column list and table sizes | `catalog.json` (from `dbt docs generate`) |
 
 BigQuery's query log only covers the project you query it in, and keeps roughly 180 days of
-history. So the scan runs in the project your models live in (read from your project, or set
-with `--project`). Before scanning, the tool tries to list everyone's queries. If BigQuery
+history, which is also the default window, so `WAREHOUSE_RETENTION_DAYS` only bites here on an
+explicit over-ask (see the Redshift section for how the fallback reports itself). So the scan
+runs in the project your models live in (read from your project, or set with `--project`). Before scanning, the tool tries to list everyone's queries. If BigQuery
 refuses, it stops and says the `bigquery.jobs.listAll` permission is missing. Without that
 permission, "unused" would quietly mean "unused by me".
 
@@ -165,7 +166,9 @@ The design decisions, and what remains to confirm:
   aside as too-new at the default `--min-age-days` once TABLES has a row for it. Retention is
   not indefinite: ACCOUNT_USAGE keeps 365 days, so oldest incarnations age out after a year.
   That is harmless, because any surviving row still dates the relation far past
-  `--min-age-days`, and a relation with no rows at all no longer exists.
+  `--min-age-days`, and a relation with no rows at all no longer exists. The same 365 sits in
+  `WAREHOUSE_RETENTION_DAYS`, so `--lookback-days 400` falls back to 365 and says so; at the
+  180-day default nothing is capped here.
 - **A dead node with no first-seen row is set aside, not judged** (*decided 2026-07-10*).
   `ACCOUNT_USAGE.TABLES` lags reality (documented 90 minutes; ACCESS_HISTORY 3 hours, both
   approximate and often much less), so such a node cannot prove its age and goes to "missing a
@@ -237,17 +240,41 @@ The design decisions, and what the live scans showed:
   driver hands back naive datetimes (found live; BigQuery and Snowflake return aware ones). The
   client stamps UTC on them at its boundary, since the verdicts compare against aware `now`
   values.
-- **Retention caps the window.** AWS guarantees seven days of history in `SYS_QUERY_HISTORY`,
-  which bounds both the effective `--lookback-days` and how far back `first_seen` can reach,
-  making "unused" a weaker signal here than elsewhere, documented rather than worked around.
-  First-seen still comes from the query history, never `SVV_TABLE_INFO.create_time`, which
-  resets on every rebuild. A dead node with no first-seen row means no jobs within retention and
-  is judged normally, like BigQuery; the missing-first-seen set-aside is for Snowflake's lagging
-  TABLES metadata and Databricks' retained-lineage gaps, not Redshift's failure mode. A demo
-  account left idle for a week lost its history in full and reported all thirteen models unused,
-  the correct verdict on the evidence left and the sharpest illustration of the cap: the report
-  still prints the requested 180-day window rather than the seven days the warehouse can answer
-  for. Surfacing the effective window is tracked as a GitHub issue.
+- **Retention caps the window, and the report says so.** Every warehouse has an entry in
+  `WAREHOUSE_RETENTION_DAYS` (`config.py`) and `Config.effective_lookback_days` clips the
+  request to it: BigQuery 180, Snowflake 365, Databricks 365, Redshift seven. When the clip
+  bites, the header names both windows, the CLI prints the same sentence to stderr before the
+  scan starts, and JSON carries `lookback_days` beside `requested_lookback_days`. Only Redshift
+  reaches it at the 180-day default; elsewhere it takes an explicit over-ask such as
+  `--lookback-days 400`. AWS documents seven days of log history for the older STL views and
+  states no retention at all for the SYS views, so the seven is a conservative floor rather
+  than a guarantee. It bounds both the effective `--lookback-days` and how far back `first_seen`
+  can reach, making "unused" a weaker signal here than elsewhere:
+  `Only 7 days lookback displayed (180 requested but Redshift SYS views retain only 7)`. **The cap is report-only: the
+  SQL still asks for the full requested window.** Since AWS states no SYS retention, an account
+  may keep more than seven days, and clamping the query could only discard evidence, while
+  asking for 180 can never return more than exists. First-seen still comes from the query
+  history, never `SVV_TABLE_INFO.create_time`, which resets on every rebuild. A dead node with
+  no first-seen row means no jobs within retention and is judged normally, like BigQuery; the
+  missing-first-seen set-aside is for Snowflake's lagging TABLES metadata and Databricks'
+  retained-lineage gaps, not Redshift's failure mode. A demo account left idle for a week lost
+  its history in full and reported all thirteen models unused, the correct verdict on the
+  evidence left and the reason the effective window is now stated rather than assumed.
+  *Confirmed live:* the capped header, the stderr warning, `requested_lookback_days` in JSON,
+  and a `--lookback-days 3` run reporting a plain three-day window, all at exit 0.
+- **Retention on the demo workgroup is unmeasured and may be shorter than the floor.** A live
+  read of `SYS_QUERY_HISTORY` on 2026-07-21 found its oldest row timestamped 2026-07-20 13:12,
+  roughly twenty hours back, across 36 rows spanning two days. This does not measure retention:
+  the workgroup is idle between demo sessions, so an empty stretch is indistinguishable from an
+  aged-out one. What it does show is that queries from the 2026-07-11 session are gone ten days
+  later, which bounds retention below ten days and is consistent with the seven-day floor. It
+  never showed retention *longer* than seven days, so the cap has not been observed to discard
+  evidence. The open risk runs the other way: if an account retains less than seven days, the
+  header still claims seven and over-states the evidence window. Settling it needs queries of a
+  known age to age out under observation, so five marked probe queries were planted on the demo
+  workgroup on 2026-07-21 and are checked on a schedule; `next_steps.md` holds the identifiers,
+  the check SQL, and how to read each outcome. Until that returns, the seven is a documented
+  floor, not a promise about any particular account.
 - **The dbt exclusion reuses the Snowflake form** (`REGEXP_COUNT(query_text, $$...$$) = 0`);
   Redshift supports both the function and dollar-quoted literals. `query_text` is truncated at
   4000 characters, which is harmless: dbt's query-comment leads the statement, and the
@@ -269,7 +296,10 @@ The design decisions, and what the live scans showed:
   `INSERT`, CTAS, or streaming leave no row), and its retention is the same unmeasured SYS
   window; if that window is shorter than `--stale-source-days`, any table with a row was loaded
   within retention and can never look stale, so the check could never fire. Revisit only if the
-  retention measurement shows a window comfortably longer than the threshold. *Confirmed live:*
+  retention measurement shows a window comfortably longer than the threshold. The seven days in
+  `WAREHOUSE_RETENTION_DAYS` is not that measurement: it is a documented floor taken from the
+  STL views, deliberately conservative, and reading it as a measured SYS window would revive
+  this check on evidence that does not exist. *Confirmed live:*
   with a declared source in the manifest, the scan prints the skip note on stderr, reports
   `stale_checked` false, and exits 0.
 - **Connection comes from `REDSHIFT_*` environment variables** (`HOST`, `USER`, `PASSWORD`,
@@ -319,7 +349,9 @@ inventory is separately optional and reads `system.information_schema.tables`.
   A relation absent from retained lineage has unproven age and is always set aside, including
   when the caller disables the recent-age threshold. Query history is in Public Preview and,
   like table lineage, has a rolling 365-day window, so the effective evidence window cannot
-  exceed retained regional system-table data.
+  exceed retained regional system-table data. That 365 sits in `WAREHOUSE_RETENTION_DAYS`, so
+  `--lookback-days 400` falls back to 365 and says so; at the 180-day default nothing is capped
+  here.
 - **Column analysis, source freshness, and live storage metrics are deferred**, each tracked as
   a GitHub issue. Complete query-text or column-lineage coverage is not proved across SQL
   warehouses, serverless compute, and classic compute; no safe last-data timestamp is

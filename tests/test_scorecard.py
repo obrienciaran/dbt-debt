@@ -680,3 +680,32 @@ def test_scan_on_redshift_skips_the_stale_source_check_with_a_note(
     assert card.stale_checked is False
     assert card.stale_sources == ()
     assert "stale-source check" in capsys.readouterr().err
+
+
+def _lookback_config(warehouse: str, lookback_days: int = 180) -> Config:
+    return Config(
+        project_dir=FIXTURE.parent.parent,
+        target_path=Path(FIXTURE.parent.name),
+        warehouse=warehouse,
+        lookback_days=lookback_days,
+    )
+
+
+def test_scan_on_redshift_reports_the_retained_window_and_keeps_the_request() -> None:
+    # The scorecard carries the window the warehouse can answer for, with the request kept
+    # alongside it so the report can say the evidence was truncated.
+    card = _scan(_lookback_config("redshift"), FakeWarehouseClient())
+    assert card.lookback_days == 7
+    assert card.requested_lookback_days == 180
+
+
+def test_scan_off_redshift_reports_the_requested_window_unchanged() -> None:
+    card = _scan(_lookback_config("bigquery"), FakeWarehouseClient())
+    assert card.lookback_days == 180
+    assert card.requested_lookback_days is None
+
+
+def test_a_request_inside_redshift_retention_is_not_flagged_as_capped() -> None:
+    card = _scan(_lookback_config("redshift", lookback_days=3), FakeWarehouseClient())
+    assert card.lookback_days == 3
+    assert card.requested_lookback_days is None

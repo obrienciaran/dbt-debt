@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from dbt_debt.report.render_json import render_json, render_orphans_json
 from dbt_debt.report.render_text import humanize_bytes, render_orphans_text, render_text
@@ -256,6 +257,73 @@ def test_render_text_lists_rarely_used_band_with_its_evidence() -> None:
     data = json.loads(render_json(card))
     assert data["rarely_used"][0]["query_count"] == 2
     assert data["rare_threshold"] == 5
+
+
+def test_render_text_says_when_retention_capped_the_window() -> None:
+    card = replace(CARD, lookback_days=7, requested_lookback_days=180, warehouse="redshift")
+    text = render_text(card)
+    assert (
+        "Only 7 days lookback displayed (180 requested but Redshift SYS views retain only 7)"
+        in text
+    )
+    assert "Lookback: 180 days" not in text
+
+
+def test_every_warehouse_phrase_agrees_in_number() -> None:
+    # The subjects differ in number ("SYS views retain" but "JOBS retains"), so each phrase
+    # carries its own verb; a missing one reads as broken English in the header.
+    from dbt_debt.report.render_text import lookback_line
+
+    assert lookback_line(180, "bigquery", 400) == (
+        "Only 180 days lookback displayed "
+        "(400 requested but BigQuery INFORMATION_SCHEMA.JOBS retains only 180)"
+    )
+    assert lookback_line(365, "snowflake", 400) == (
+        "Only 365 days lookback displayed "
+        "(400 requested but Snowflake ACCOUNT_USAGE retains only 365)"
+    )
+    assert lookback_line(365, "databricks", 400) == (
+        "Only 365 days lookback displayed "
+        "(400 requested but Databricks system tables retain only 365)"
+    )
+    # An unlisted warehouse still reads as a sentence.
+    assert lookback_line(90, "duckdb", 400) == (
+        "Only 90 days lookback displayed (400 requested but duckdb query history retains only 90)"
+    )
+
+
+def test_render_text_uncapped_window_reads_plainly() -> None:
+    assert "Lookback: 180 days" in render_text(CARD)
+    assert "requested but" not in render_text(CARD)
+
+
+def test_the_rarely_used_band_counts_days_in_the_retained_window() -> None:
+    # The band's sentence must quote the window the evidence actually covers, not the request.
+    card = replace(
+        CARD,
+        lookback_days=7,
+        requested_lookback_days=180,
+        warehouse="redshift",
+        rarely_used=(
+            RarelyUsedModel(
+                unique_id="model.x.dim_old",
+                name="dim_old",
+                relation_key="p.d.dim_old",
+                query_count=2,
+                last_queried=None,
+                total_bytes=0,
+            ),
+        ),
+        rare_threshold=5,
+    )
+    assert "at most 5 queries in 7 days" in render_text(card)
+
+
+def test_json_carries_both_windows() -> None:
+    capped = json.loads(render_json(replace(CARD, lookback_days=7, requested_lookback_days=180)))
+    assert capped["lookback_days"] == 7
+    assert capped["requested_lookback_days"] == 180
+    assert json.loads(render_json(CARD))["requested_lookback_days"] is None
 
 
 def test_render_text_coverage_sentences_and_unpartitioned_tables() -> None:

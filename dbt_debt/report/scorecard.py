@@ -273,6 +273,7 @@ class Scorecard:
 
     project_name: str
     lookback_days: int
+    """The window the warehouse can answer for, which retention may bound below the request."""
     active_models: int
     unused_models: int
     removable_tests: tuple[str, ...] = ()
@@ -312,6 +313,9 @@ class Scorecard:
     columns: ColumnReport | None = None
     orphans: OrphanReport | None = None
     warehouse: str = "bigquery"
+    requested_lookback_days: int | None = None
+    """What the caller asked for, set only when warehouse retention bounds the window below it.
+    None means the effective window is exactly what was requested."""
 
 
 def _affected_semantic_entry(
@@ -574,7 +578,10 @@ def build_scorecard(
 
     return Scorecard(
         project_name=manifest.project_name,
-        lookback_days=config.lookback_days,
+        lookback_days=config.effective_lookback_days,
+        requested_lookback_days=(
+            config.lookback_days if config.effective_lookback_days < config.lookback_days else None
+        ),
         warehouse=config.warehouse,
         active_models=len(manifest.models) - len(unqueried),
         unused_models=len(dead),

@@ -60,13 +60,18 @@ Top 3 of 3 unused columns (ranked by table bytes; BigQuery has no per-column siz
 ## 📊 What the numbers mean
 
 A **model** is one of your `.sql` files. A **column** is one field in the table that model builds.
-The **lookback window** is how far back we read the warehouse's query log: 180 days by default,
-which is also the most BigQuery keeps. Snowflake keeps a year, so `--lookback-days` can go up
-to 365 there. Redshift's SYS query-history views keep much less (AWS leaves the exact
-retention unstated; the older STL views keep seven days), so on Redshift the effective window
-is however much history the account actually retains, so "unused" there means "unused within
-that history". Databricks lineage and query-history system tables retain a rolling 365 days;
-`system.query.history` is in Public Preview, so its schema, availability, and pricing can change.
+The **lookback window** is how far back we read the warehouse's query log. The default is 180
+days, and each warehouse keeps a different maximum:
+
+| Warehouse | Query log kept |
+|---|---|
+| BigQuery | 180 days |
+| Snowflake | 365 days |
+| Databricks | 365 days |
+| Redshift | 7 days |
+
+Ask for more than a warehouse keeps and you get its maximum, and the report tells you. Only
+Redshift hits this at the default, so "unused" there means unused in the last week.
 
 - **active / unused models.** A model is **unused** if, in the window, nothing queried it and
   nothing queried anything built from it. Everything else is **active**. Seeds and snapshots are

@@ -28,6 +28,30 @@ WAREHOUSE_DIALECTS = {
 }
 """The sqlglot dialect every SQL parse uses, keyed by warehouse."""
 
+WAREHOUSE_RETENTION_DAYS = {
+    "bigquery": 180,
+    "snowflake": 365,
+    "redshift": 7,
+    "databricks": 365,
+}
+"""How much query history each warehouse keeps, keyed by warehouse.
+
+Snowflake's ACCOUNT_USAGE and Databricks' query-history and lineage system tables both document
+a year. BigQuery's INFORMATION_SCHEMA.JOBS is documented at 180 days, which is also the default
+window, so it only ever bites on an explicit over-ask. Redshift is the odd one: AWS documents
+seven days for the older STL views and states no retention at all for the SYS views, so seven is
+a conservative floor rather than a measurement of what any account holds. `next_steps.md` tracks
+the experiment measuring it.
+
+This bounds what the report *claims* to have seen, so a model queried less often than the real
+window is not silently called unused. It deliberately does not bound what the adapters ask the
+warehouse for, and it does not need to: a warehouse cannot return history it no longer holds, so
+asking for 400 days returns exactly what asking for the retained window would. On Redshift that
+distinction is load-bearing, because AWS states no SYS retention and an account may keep more
+than the floor, so clamping the queries could discard evidence we would otherwise have. See the
+comment above `RealRedshiftClient.table_usage`.
+"""
+
 
 @dataclass(frozen=True)
 class Config:
@@ -63,6 +87,17 @@ class Config:
         """The sqlglot dialect matching the warehouse the scan targets."""
 
         return WAREHOUSE_DIALECTS.get(self.warehouse, self.warehouse)
+
+    @property
+    def effective_lookback_days(self) -> int:
+        """`lookback_days` bounded by what the warehouse's query history is known to retain.
+
+        Read this only once `warehouse` is resolved (the CLI replaces the field after reading
+        the manifest); before that it reports the BigQuery default's window.
+        """
+
+        cap = WAREHOUSE_RETENTION_DAYS.get(self.warehouse)
+        return min(self.lookback_days, cap) if cap is not None else self.lookback_days
 
     @property
     def manifest_path(self) -> Path:

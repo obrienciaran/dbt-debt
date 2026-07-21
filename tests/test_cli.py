@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,34 @@ def test_invalid_query_comment_pattern_exits_cleanly(
 def test_lookback_days_must_be_positive(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["scan", "--lookback-days", "0"]) == 2
     assert "--lookback-days" in capsys.readouterr().err
+
+
+def test_redshift_caps_the_lookback_window_at_its_retention() -> None:
+    # Redshift's SYS views keep far less than the 180-day default, so the report must not claim
+    # a window the warehouse cannot answer for.
+    config = _config_from_args(_build_parser().parse_args(["scan"]))
+    assert replace(config, warehouse="redshift").effective_lookback_days == 7
+
+
+def test_the_default_window_is_untouched_off_redshift() -> None:
+    # Every other warehouse retains at least the 180-day default, so the common case must not
+    # warn or shrink: Redshift is the only one where a default run is capped.
+    config = _config_from_args(_build_parser().parse_args(["scan"]))
+    for warehouse in ("bigquery", "snowflake", "databricks"):
+        assert replace(config, warehouse=warehouse).effective_lookback_days == 180
+
+
+def test_an_over_ask_falls_back_to_each_warehouse_maximum() -> None:
+    config = _config_from_args(_build_parser().parse_args(["scan", "--lookback-days", "400"]))
+    caps = {"bigquery": 180, "snowflake": 365, "redshift": 7, "databricks": 365}
+    for warehouse, cap in caps.items():
+        assert replace(config, warehouse=warehouse).effective_lookback_days == cap
+
+
+def test_the_cap_never_raises_a_shorter_request() -> None:
+    # It is a ceiling, not a floor: asking for less than retention still asks for less.
+    config = _config_from_args(_build_parser().parse_args(["scan", "--lookback-days", "3"]))
+    assert replace(config, warehouse="redshift").effective_lookback_days == 3
 
 
 def test_malformed_manifest_exits_two_with_the_path(
@@ -259,6 +288,52 @@ def test_redshift_scan_without_the_connector_exits_three(
     (target / "manifest.json").write_text(json.dumps(manifest))
     assert main(["scan", "--project-dir", str(tmp_path), "--no-cache"]) == 3
     assert "dbt-debt[redshift]" in capsys.readouterr().err
+
+
+def _scan_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], adapter_type: str, *argv: str
+) -> str:
+    manifest = {
+        "metadata": {**_METADATA, "adapter_type": adapter_type},
+        "nodes": {"model.p.m": {"resource_type": "model", "name": "m", "schema": "s"}},
+    }
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "manifest.json").write_text(json.dumps(manifest))
+    main(["scan", "--project-dir", str(tmp_path), "--no-cache", *argv])
+    return capsys.readouterr().err
+
+
+def test_redshift_warns_on_stderr_that_the_window_was_capped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Announced before the scan runs, so a run piped to a file still reports the short window.
+    err = _scan_stderr(tmp_path, capsys, "redshift")
+    assert (
+        "Only 7 days lookback displayed (180 requested but Redshift SYS views retain only 7)" in err
+    )
+
+
+def test_no_cap_warning_when_the_request_fits_retention(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert "lookback displayed" not in _scan_stderr(
+        tmp_path, capsys, "redshift", "--lookback-days", "3"
+    )
+
+
+def test_no_cap_warning_off_redshift(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert "lookback displayed" not in _scan_stderr(tmp_path, capsys, "snowflake")
+
+
+def test_an_over_ask_warns_on_stderr_off_redshift(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Asking Snowflake for more than the year it keeps is the only way a non-Redshift scan
+    # reaches the cap, and it must say so rather than reporting the request back unchanged.
+    err = _scan_stderr(tmp_path, capsys, "snowflake", "--lookback-days", "400")
+    assert "Only 365 days lookback displayed" in err
+    assert "Snowflake ACCOUNT_USAGE retains only 365" in err
 
 
 def test_cache_key_carries_the_warehouse(tmp_path: Path) -> None:

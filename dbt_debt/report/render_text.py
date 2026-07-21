@@ -47,6 +47,18 @@ _MISSING_FIRST_SEEN_HINTS: dict[str, str] = {
     ),
 }
 
+_RETENTION_CAP_SOURCE: dict[str, str] = {
+    "redshift": "Redshift SYS views retain",
+    "snowflake": "Snowflake ACCOUNT_USAGE retains",
+    "databricks": "Databricks system tables retain",
+    "bigquery": "BigQuery INFORMATION_SCHEMA.JOBS retains",
+}
+"""What holds the window short, keyed by warehouse; named in the capped lookback line.
+
+Each phrase carries its own verb because the subjects differ in number: "SYS views retain" but
+"INFORMATION_SCHEMA.JOBS retains".
+"""
+
 _UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
 
@@ -61,6 +73,25 @@ def humanize_bytes(num: int) -> str:
     # Unreachable: the loop always returns on the last unit. Kept because mypy cannot prove
     # _UNITS is non-empty, so without it the function reads as missing a return on some path.
     return f"{num} B"
+
+
+def lookback_line(effective_days: int, warehouse: str, requested_days: int | None = None) -> str:
+    """The report's lookback sentence, in plain or retention-capped form.
+
+    `requested_days` is set only when the warehouse retains less than the caller asked for, in
+    which case the sentence names both windows. The CLI prints the capped form to stderr too,
+    so a run piped to a file still says the evidence window was short.
+    """
+
+    if requested_days is None:
+        return f"Lookback: {effective_days} days"
+    # The fallback carries its own verb too, so a warehouse added to WAREHOUSE_RETENTION_DAYS
+    # before it gets a phrase here still reads as a sentence.
+    source = _RETENTION_CAP_SOURCE.get(warehouse, f"{warehouse} query history retains")
+    return (
+        f"Only {effective_days} days lookback displayed "
+        f"({requested_days} requested but {source} only {effective_days})"
+    )
 
 
 def _plural(count: int, noun: str) -> str:
@@ -92,7 +123,9 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
     columns = scorecard.columns
     lines: list[str] = [
         f"dbt-debt scorecard — {scorecard.project_name}",
-        f"Lookback: {scorecard.lookback_days} days",
+        lookback_line(
+            scorecard.lookback_days, scorecard.warehouse, scorecard.requested_lookback_days
+        ),
         "",
         "Models:",
         f"  ✓ {scorecard.active_models} active",

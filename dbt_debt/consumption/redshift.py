@@ -99,6 +99,14 @@ class RealRedshiftClient:
                 f"This Redshift user cannot see other users' query history: {_PERMISSION_HINT}"
             )
 
+    # Both usage queries ask for `lookback_days`, the full requested window, never
+    # `effective_lookback_days`. The seven-day cap in `WAREHOUSE_RETENTION_DAYS` bounds what the
+    # report *claims* to have seen, not what we ask the warehouse for. AWS states no retention
+    # for the SYS views (the documented seven days covers the older STL views), so an account
+    # may well keep more, and clamping these queries to seven could only discard evidence we
+    # would otherwise have. Asking for 180 days can never return more history than exists, so
+    # the wide window costs nothing and may gain us real usage rows. Do not "fix" this to use
+    # the capped value.
     def table_usage(self) -> list[UsageRow]:
         exclusion = redshift_queries.exclusion_clause(
             self._config.query_comment_pattern, column="qh.query_text"

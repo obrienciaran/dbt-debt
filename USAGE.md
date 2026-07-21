@@ -71,12 +71,19 @@ A few cases to keep in mind:
   downstream copy never appears in the query log, so it can look unused. Declare those
   consumers as exposures (see below); a model feeding one is flagged for review instead of
   marked removable.
-- **Anything used less often than the lookback window.** BigQuery keeps 180 days of history
-  (the default and the max); Snowflake keeps a year, so `--lookback-days` can go to 365 there.
-  Redshift's SYS views keep much less (AWS leaves the retention unstated; the older STL views
-  keep seven days), so on Redshift the window is capped by whatever the account retains and
-  "unused" is a correspondingly weaker signal. A report that runs once a year can still look
-  unused; that needs a human call.
+- **Anything used less often than the lookback window.** Each warehouse keeps a different
+  amount of query history: BigQuery 180 days, Snowflake 365, Databricks 365, Redshift seven
+  (AWS leaves the SYS retention unstated; the older STL views keep seven days). Ask for more
+  than a warehouse keeps and the scan falls back to its maximum and says so, on the scorecard
+  header and on stderr, with `requested_lookback_days` beside `lookback_days` in the JSON:
+
+  ```
+  Only 365 days lookback displayed (400 requested but Snowflake ACCOUNT_USAGE retains only 365)
+  ```
+
+  Only Redshift hits this at the default 180, where "unused" means unused in the last week
+  rather than the last six months. A report that runs once a year can still look unused; that
+  needs a human call.
 - **Databricks hybrid evidence.** Successful `SELECT` lineage with a statement ID is joined to
   query history, including result-cache repeats, so dbt-tagged statements can be excluded.
   Statement IDs are documented for SQL warehouses and can also appear for serverless events.
@@ -256,7 +263,10 @@ catalog size. Redshift has no time-travel or fail-safe storage, so there is no r
 breakdown, and it exposes no table last-modified metadata, so the stale-source check is
 skipped with a note. One retention caveat: the SYS views keep a bounded history (AWS leaves
 the exact figure unstated; the older STL views keep seven days), which caps both the
-effective lookback window and how far back a first-seen date can reach.
+effective lookback window and how far back a first-seen date can reach. The report states the
+capped window instead of the requested one, on the scorecard and on stderr. The queries
+themselves still ask for the full requested window, since an account may retain more than the
+seven-day floor and asking for more can only return more.
 
 The same `SVV_TABLE_INFO` read feeds a Redshift-only table-hygiene check: a table of 1 GB or
 more is flagged when its unsorted region reaches 20% (needs VACUUM), its `stats_off` reaches
@@ -341,8 +351,9 @@ dbt-debt scan
     --region US               which BigQuery region your query log is in (BigQuery only)
     --connection <name>       named Snowflake connection from connections.toml (Snowflake only;
                               Redshift and Databricks connect from environment variables)
-    --lookback-days 180       how far back to look (max 180 on BigQuery, 365 on Snowflake;
-                              capped by retained metadata on Redshift and Databricks)
+    --lookback-days 180       how far back to look; a bigger number falls back to what the
+                              warehouse keeps (BigQuery 180, Snowflake 365, Redshift 7,
+                              Databricks 365) and the report says so
     --query-comment-pattern   how to recognise dbt's own queries (a regex)
     --columns                 also check which columns are unused (default: models only;
                               explicitly skipped on Databricks)

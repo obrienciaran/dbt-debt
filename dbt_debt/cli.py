@@ -34,7 +34,7 @@ from dbt_debt.domain import Manifest, TableHygiene, TableStorage, WarehouseRelat
 from dbt_debt.lineage.sqlglot_source import SqlglotLineage
 from dbt_debt.references import model_relation_references
 from dbt_debt.report.render_json import render_json, render_orphans_json
-from dbt_debt.report.render_text import render_orphans_text, render_text
+from dbt_debt.report.render_text import lookback_line, render_orphans_text, render_text
 from dbt_debt.report.scorecard import (
     ColumnReport,
     Scorecard,
@@ -425,6 +425,13 @@ def _run_scan(args: argparse.Namespace) -> int:
         print(
             f"--region only applies to BigQuery; ignoring for {config.warehouse}.", file=sys.stderr
         )
+    # Said up front, and again in the report header, so the truncated window is visible whether
+    # the run is watched at a terminal or piped to a file.
+    if config.effective_lookback_days < config.lookback_days:
+        print(
+            lookback_line(config.effective_lookback_days, config.warehouse, config.lookback_days),
+            file=sys.stderr,
+        )
     database = config.project or _infer_database(manifest)
     try:
         client = _wrap_cache(_make_client(config, database), config, database)
@@ -575,7 +582,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "default connection).",
     )
     scan.add_argument(
-        "--lookback-days", type=int, default=180, help="Usage window (JOBS retention is ~180)."
+        "--lookback-days",
+        type=int,
+        default=180,
+        help="Usage window in days. A request above what the warehouse keeps falls back to its "
+        "maximum: BigQuery 180, Snowflake 365, Redshift 7, Databricks 365.",
     )
     scan.add_argument(
         "--query-comment-pattern",

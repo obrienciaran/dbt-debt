@@ -243,6 +243,17 @@ def test_ignored_model_is_excluded_from_the_unused_count_end_to_end(
     assert "fed by an external export" in out
 
 
+def test_a_bad_ignore_file_still_allows_an_orphan_only_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `--orphans` reports warehouse state that has nothing to do with model usage, so a
+    # broken ignore file (which would fail a normal scan with exit 2) must not block it.
+    _write_scannable_project(tmp_path, monkeypatch)
+    (tmp_path / "dbt-debt-ignore.json").write_text("{not json")
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache", "--orphans"]) == 0
+    assert "dbt-debt orphans" in capsys.readouterr().out
+
+
 def test_warehouse_error_mid_scan_exits_three(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

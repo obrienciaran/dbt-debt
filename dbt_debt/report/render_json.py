@@ -9,9 +9,15 @@ from dbt_debt.report.scorecard import OrphanReport, Scorecard
 
 
 def render_json(scorecard: Scorecard) -> str:
-    """Serialize the scorecard to indented JSON."""
+    """Serialize the scorecard to indented JSON, with a dedicated ignored-overrides section."""
 
-    return json.dumps(asdict(scorecard), indent=2)
+    payload = asdict(scorecard)
+    ignored = [m for m in scorecard.dead_models if m.ignored]
+    payload["ignored_overrides"] = [
+        {"unique_id": m.unique_id, "name": m.name, "reason": m.reason}
+        for m in ignored
+    ]
+    return json.dumps(payload, indent=2)
 
 
 def render_orphans_json(scorecard: Scorecard) -> str:

@@ -200,7 +200,7 @@ def test_malformed_ignore_file_exits_two(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _write_manifest(tmp_path, nodes={"model.p.m": _model_node("m")})
-    (tmp_path / "dbt-debt-ignore.json").write_text("{ not json")
+    (tmp_path / "dbt-debt-ignore.json").write_text("{not json")
     assert main(["scan", "--project-dir", str(tmp_path)]) == 2
     assert "not valid JSON" in capsys.readouterr().err
 
@@ -237,8 +237,10 @@ def test_ignored_model_is_excluded_from_the_unused_count_end_to_end(
     )
     assert main(["scan", "--project-dir", str(tmp_path), "--no-cache", "--print"]) == 0
     out = capsys.readouterr().out
-    assert "1 active" in out
+    assert "0 active" in out
     assert "0 unused" in out
+    assert "Ignored overrides" in out
+    assert "fed by an external export" in out
 
 
 def test_warehouse_error_mid_scan_exits_three(

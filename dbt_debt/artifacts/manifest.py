@@ -79,6 +79,8 @@ def parse_manifest(data: dict[str, Any]) -> Manifest:
                 depends_on=_depends_on(node),
             )
 
+    disabled = _parse_disabled(data)
+
     adapter_type = metadata.get("adapter_type")
     return Manifest(
         project_name=str(metadata.get("project_name", "")),
@@ -90,6 +92,7 @@ def parse_manifest(data: dict[str, Any]) -> Manifest:
         exposures=exposures,
         relations=relations,
         semantic_consumers=semantic_consumers,
+        disabled_models=disabled,
     )
 
 
@@ -211,6 +214,23 @@ def _parse_exposure(unique_id: str, node: dict[str, Any]) -> Exposure:
 def _depends_on(node: dict[str, Any]) -> tuple[str, ...]:
     nodes = as_dict(node.get("depends_on")).get("nodes") or []
     return tuple(nodes)
+
+
+def _parse_disabled(data: dict[str, Any]) -> frozenset[str]:
+    """Collect unique_ids from the manifest's disabled section.
+
+    Disabled nodes are listed as objects under ``disabled`` rather than keyed under ``nodes``,
+    because they have no runtime identity. We only need their unique IDs so an ignore-list
+    resolver can warn and skip them.
+    """
+
+    disabled: set[str] = set()
+    for entry in as_dict(data).get("disabled") or []:
+        if isinstance(entry, dict):
+            unique_id = entry.get("unique_id")
+            if isinstance(unique_id, str):
+                disabled.add(unique_id)
+    return frozenset(disabled)
 
 
 def _check_schema_version(schema_version: str) -> None:

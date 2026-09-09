@@ -345,6 +345,10 @@ def _render(scorecard: Scorecard, config: Config, detail: bool) -> str:
 def _render_orphans(scorecard: Scorecard, config: Config) -> str:
     """The focused `--orphans` report: just orphaned relations and undeclared sources."""
 
+    # Orphan runs ignore the ignore list entirely: they are about warehouse state, not
+    # operator overrides of model usage. Replace the config so any render-time ignore logic
+    # sees an empty ignore set.
+    config = replace(config, ignored_model_ids=frozenset(), ignore_reasons_by_id={})
     if config.output_format == "json":
         return render_orphans_json(scorecard)
     return render_orphans_text(scorecard)
@@ -429,15 +433,19 @@ def _run_scan(args: argparse.Namespace) -> int:
         return 2
     try:
         ignore_reasons = load_ignored_models(config.resolved_ignore_file)
-        resolved_ignored_ids = ignored_model_ids(manifest, ignore_reasons)
+        resolved_ignored = ignored_model_ids(manifest, ignore_reasons)
     except (IgnoreConfigError, UnknownIgnoredModelError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+        if args.orphans:
+            resolved_ignored = {}
+        else:
+            print(str(exc), file=sys.stderr)
+            return 2
     try:
         config = replace(
             config,
             warehouse=_resolve_warehouse(args.warehouse, manifest),
-            ignored_model_ids=frozenset(resolved_ignored_ids),
+            ignored_model_ids=frozenset(resolved_ignored),
+            ignore_reasons_by_id=resolved_ignored,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

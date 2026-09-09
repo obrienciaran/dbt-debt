@@ -16,8 +16,10 @@ needs no new dependency.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+
+from dbt_debt.artifacts._json import load_artifact
+from dbt_debt.artifacts.errors import ArtifactError
 
 
 class IgnoreConfigError(ValueError):
@@ -25,7 +27,7 @@ class IgnoreConfigError(ValueError):
 
 
 def load_ignored_models(path: Path) -> dict[str, str]:
-    """Model name -> reason, read from `path`; `{}` when the file does not exist.
+    """Model name/unique_id -> reason, read from `path`; `{}` when the file does not exist.
 
     Every entry must carry a non-empty ``reason``: an ignore with no stated reason
     defeats the point of naming *why* a model is excluded, not just that it is.
@@ -34,9 +36,9 @@ def load_ignored_models(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     try:
-        raw = json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        raise IgnoreConfigError(f"{path} is not valid JSON: {exc}") from exc
+        raw = load_artifact(path)
+    except ArtifactError as exc:
+        raise IgnoreConfigError(str(exc)) from exc
     entries = raw.get("ignored_models") if isinstance(raw, dict) else None
     if not isinstance(entries, list):
         raise IgnoreConfigError(f'{path} must have a top-level "ignored_models" list.')

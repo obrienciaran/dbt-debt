@@ -538,6 +538,12 @@ entity, dimension, or measure `expr` is *blocked* rather than consumed (`verdict
 and the blocker check). Real semantic-layer queries hit the warehouse and count as observed
 usage anyway.
 
+The same rule applies to the operator-maintained ignore list (`dbt-debt-ignore.json`). An ignored
+model stays in the dead model set and is visible to every warehouse-evidence verdict (column-stage
+unused columns, removable tests), but it is excluded from the headline `unused_models` count and
+from `reclaimable_bytes` at render time. Declared use (exposure, semantic layer, ignore) can block
+counting a model as unused, but it cannot revive a dead model in the warehouse-evidence view.
+
 The node shapes are validated against a real populated manifest (dbt 1.11, manifest v12, via the
 demo projects' `_semantic.yml`): the three top-level keys arrive as `{unique_id: node}` dicts,
 `depends_on.nodes` chains model → semantic model → metric → saved query exactly as the fixpoint

@@ -571,7 +571,9 @@ def build_scorecard(
 
     storage_by_key = dict(table_storage or {})
 
-    def ranked_assets(uids: Set[str], reasons: Mapping[str, str] | None = None) -> tuple[DeadModel, ...]:
+    def ranked_assets(
+        uids: Set[str], reasons: Mapping[str, str] | None = None
+    ) -> tuple[DeadModel, ...]:
         ranked = sorted(uids, key=lambda uid: (-_model_bytes(manifest, storage_bytes, uid), uid))
 
         def entry(uid: str) -> DeadModel:

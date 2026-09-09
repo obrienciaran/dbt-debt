@@ -14,8 +14,7 @@ def render_json(scorecard: Scorecard) -> str:
     payload = asdict(scorecard)
     ignored = [m for m in scorecard.dead_models if m.ignored]
     payload["ignored_overrides"] = [
-        {"unique_id": m.unique_id, "name": m.name, "reason": m.reason}
-        for m in ignored
+        {"unique_id": m.unique_id, "name": m.name, "reason": m.reason} for m in ignored
     ]
     return json.dumps(payload, indent=2)
 

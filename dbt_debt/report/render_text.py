@@ -580,7 +580,9 @@ def _detail_models(dead_models: tuple[DeadModel, ...]) -> list[str]:
         size = f"  {humanize_bytes(model.total_bytes)}" if model.total_bytes > 0 else ""
         path = f"  {model.file_path}" if model.file_path else ""
         ignored = f"  (ignored: {model.reason})" if model.ignored else ""
-        lines.append(f"  - {model.name}{_kind_tag(model)}{size}{_retained_tag(model)}{ignored}{path}")
+        lines.append(
+            f"  - {model.name}{_kind_tag(model)}{size}{_retained_tag(model)}{ignored}{path}"
+        )
     return lines
 
 

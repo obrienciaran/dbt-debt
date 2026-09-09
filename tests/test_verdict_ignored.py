@@ -21,7 +21,9 @@ def _manifest() -> Manifest:
 
 
 def test_names_resolve_to_unique_ids() -> None:
-    assert ignored_model_ids(_manifest(), {"a": "used elsewhere"}) == {"model.p.a": "used elsewhere"}
+    assert ignored_model_ids(_manifest(), {"a": "used elsewhere"}) == {
+        "model.p.a": "used elsewhere"
+    }
 
 
 def test_unique_ids_take_precedence_over_duplicate_names() -> None:
@@ -34,7 +36,9 @@ def test_unique_ids_take_precedence_over_duplicate_names() -> None:
             "model.q.a": Model(unique_id="model.q.a", name="a"),
         },
     )
-    assert ignored_model_ids(manifest, {"model.q.a": "target package"}) == {"model.q.a": "target package"}
+    assert ignored_model_ids(manifest, {"model.q.a": "target package"}) == {
+        "model.q.a": "target package"
+    }
 
 
 def test_duplicate_name_by_name_warns_and_resolves_to_empty() -> None:

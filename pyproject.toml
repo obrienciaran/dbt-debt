@@ -28,9 +28,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/obrienciaran/dbt-debt"
-Repository = "https://github.com/obrienciaran/dbt-debt"
-Issues = "https://github.com/obrienciaran/dbt-debt/issues"
+Homepage = "https://github.com/spicy-lemonade/dbt-debt"
+Repository = "https://github.com/spicy-lemonade/dbt-debt"
+Issues = "https://github.com/spicy-lemonade/dbt-debt/issues"
 
 [project.optional-dependencies]
 bigquery = ["google-cloud-bigquery>=3.0"]

@@ -45,7 +45,7 @@ All notable changes to this project are recorded here. Versions follow
 - **Redshift scans no longer overstate the evidence window.** Redshift's `SYS` views retain
   far less than the 180-day default, so a project queried less often than weekly could read as
   entirely unused with nothing indicating the history had been truncated. The window is now
-  reported as seven days on Redshift. ([#10](https://github.com/obrienciaran/dbt-debt/issues/10))
+  reported as seven days on Redshift. ([#10](https://github.com/spicy-lemonade/dbt-debt/issues/10))
 
 ### Notes
 
@@ -67,6 +67,6 @@ the warehouse's query history, and reports what is safely removable. Also finds 
 relations, undeclared sources, unused declared sources, and stale sources. Reports only, and
 never deletes anything.
 
-[Unreleased]: https://github.com/obrienciaran/dbt-debt/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/obrienciaran/dbt-debt/compare/v0.0.1...v0.1.0
-[0.0.1]: https://github.com/obrienciaran/dbt-debt/releases/tag/v0.0.1
+[Unreleased]: https://github.com/spicy-lemonade/dbt-debt/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/spicy-lemonade/dbt-debt/compare/v0.0.1...v0.1.0
+[0.0.1]: https://github.com/spicy-lemonade/dbt-debt/releases/tag/v0.0.1

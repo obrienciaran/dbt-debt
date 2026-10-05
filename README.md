@@ -7,6 +7,8 @@
 
 ### dbt-debt finds the dead weight in a dbt project on BigQuery, Snowflake, Redshift, and Databricks.
 
+<img width="3840" height="2160" alt="dbt-debt" src="https://github.com/user-attachments/assets/5483a358-c946-437a-a9a2-5fac5b502577" />
+
 Which models and columns nobody uses anymore, which are barely used, which are safe to remove, and
 which tables exist in your warehouse with no dbt model behind them.
 

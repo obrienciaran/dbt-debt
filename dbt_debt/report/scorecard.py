@@ -380,7 +380,16 @@ def build_scorecard(
     """
 
     usage_rows = list(usage_rows)
-    queried = queried_model_ids(manifest, usage_rows)
+    # Ignore-listed models (config.ignored_model_ids, resolved by the CLI from the project's
+    # dbt-debt-ignore.json) are folded into the queried set here, before DAG propagation, so
+    # an ignore is treated exactly like a real query: the model itself, and everything it
+    # depends on, read as fully active everywhere downstream — the active count, reclaimable
+    # bytes, removable tests, exposure and semantic impact. That also means you never need to
+    # separately list a whole dead chain's upstream models by hand; ignoring the one at the
+    # bottom of the DAG keeps its ancestors alive too, the same way a real consumer would.
+    # No separate report section, by design — an ignored model is a settled call, not a
+    # review item.
+    queried = queried_model_ids(manifest, usage_rows) | config.ignored_model_ids
     unqueried = dead_models(manifest, graph, queried)
     first_seen_ids = first_seen_model_ids(manifest, first_seen or {})
     now_utc = now or datetime.now(timezone.utc)

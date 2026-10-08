@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,6 +21,9 @@ FIXTURE = Path(__file__).parent / "fixtures" / "manifest.json"
 STG_KEY = "my-gcp-project.jaffle_shop.stg_orders"
 FCT_KEY = "my-gcp-project.jaffle_shop.fct_orders"
 SEED_KEY = "my-gcp-project.jaffle_shop.country_codes"
+STG_ID = "model.jaffle_shop.stg_orders"
+FCT_ID = "model.jaffle_shop.fct_orders"
+SEED_ID = "seed.jaffle_shop.country_codes"
 SOURCE_ID = "source.jaffle_shop.raw.orders"
 SOURCE_KEY = "my-gcp-project.raw.orders"
 TEST_ID = "test.jaffle_shop.not_null_fct_orders_order_id.a1b2c3"
@@ -64,6 +68,47 @@ def test_queried_mart_keeps_everything_active() -> None:
     assert card.removable_tests == ()
     assert card.unaffected_exposures == (EXPOSURE_ID,)
     assert card.dead_models == ()
+
+
+def test_ignoring_the_bottom_of_a_dead_chain_keeps_its_whole_upstream_alive_too() -> None:
+    # fct_orders would be dead on warehouse evidence alone (no usage rows). Ignoring it is
+    # folded into DAG propagation exactly like a real query would be, so stg_orders and the
+    # seed feeding it come along for free — you never need to separately list a dead chain's
+    # upstream models by hand, only the one furthest downstream. Mirrors
+    # test_queried_mart_keeps_everything_active, but via the ignore list instead of usage.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    storage = {STG_KEY: 1024, FCT_KEY: 2048, SEED_KEY: 512}
+    config = replace(_config(), ignored_model_ids=frozenset({FCT_ID}))
+    card = build_scorecard(manifest, graph, [], storage, config)
+
+    assert (card.active_models, card.unused_models) == (3, 0)
+    assert card.dead_models == ()
+    assert card.reclaimable_bytes == 0
+    assert card.removable_tests == ()
+
+
+def test_ignoring_an_ancestor_does_not_save_an_unrelated_dead_descendant() -> None:
+    # Symmetric with test_querying_an_ancestor_does_not_save_its_descendant: propagation only
+    # runs upstream. Ignoring stg_orders (mid-chain) does not excuse fct_orders below it —
+    # the leaf of a dead chain is what needs naming, not an ancestor partway up it.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    config = replace(_config(), ignored_model_ids=frozenset({STG_ID}))
+    card = build_scorecard(manifest, graph, [], {}, config)
+
+    assert FCT_ID in {m.unique_id for m in card.dead_models}
+    assert STG_ID not in {m.unique_id for m in card.dead_models}
+
+
+def test_ignoring_an_already_active_model_is_a_no_op() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    usage = [UsageRow(relation_key=FCT_KEY, query_count=4)]
+    config = replace(_config(), ignored_model_ids=frozenset({FCT_ID}))
+    card = build_scorecard(manifest, graph, usage, {}, config)
+
+    assert (card.active_models, card.unused_models) == (3, 0)
 
 
 def test_test_on_dead_column_counts_as_removable() -> None:

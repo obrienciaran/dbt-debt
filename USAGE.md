@@ -140,6 +140,35 @@ exposures:
 The more real consumers you write down this way, the fewer things get wrongly called "unused"
 at the end of your pipeline.
 
+### 🙈 Overriding a verdict by hand (the ignore list)
+
+An exposure only *flags* an unused model feeding it for review — the model still shows up as
+unused. Sometimes you already know better and just want the model treated as active: it feeds
+a downstream system with no query log at all (a bulk export, a partner sync), or it's built
+ahead of a use that hasn't landed yet. Name it in `dbt-debt-ignore.json`, in your project
+directory (or point elsewhere with `--ignore-file`) — a copy-pasteable template is
+[`dbt-debt-ignore.example.json`](dbt-debt-ignore.example.json) in this repo:
+
+```json
+{
+  "ignored_models": [
+    {
+      "name": "fct_email_clicks",
+      "reason": "Fed by an external email-platform export dbt-debt can't see in the query log."
+    }
+  ]
+}
+```
+
+An ignored model is treated as fully active everywhere: it's excluded from the unused count,
+reclaimable-storage figures, removable-test suggestions, and exposure/semantic-layer impact —
+exactly as if the warehouse had shown it in real use. There's no separate "ignored" section in
+the report; the `reason` is documentation for your team reading the file, not something
+dbt-debt prints. Every entry needs one, so the override says *why*, not just *that*.
+
+A name that doesn't match any model in the manifest — a typo, a model since renamed or
+removed — fails the scan immediately with the bad name, rather than silently doing nothing.
+
 ## 🔐 Permissions and signing in
 
 ### BigQuery
@@ -364,6 +393,8 @@ dbt-debt scan
                               (0 disables the band)
     --stale-source-days 30    declared sources with no new data for more than this many days
                               are stale (0 disables the check)
+    --ignore-file <path>      ignore-list JSON naming models to always treat as active, each
+                              with a reason (default: dbt-debt-ignore.json in --project-dir)
     --top-n 10                how many unused assets the summary list shows
     --print                   print the full report instead of opening the viewer (every unused
                               table and column, grouped by model, with file paths)

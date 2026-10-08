@@ -32,6 +32,7 @@ from dbt_debt.consumption.client import (
 from dbt_debt.consumption.columns import consumed_model_columns
 from dbt_debt.consumption.exclusion import validate_query_comment_pattern
 from dbt_debt.domain import Manifest, TableHygiene, TableStorage, WarehouseRelation
+from dbt_debt.ignore_config import IgnoreConfigError, load_ignored_models
 from dbt_debt.lineage.sqlglot_source import SqlglotLineage
 from dbt_debt.references import model_relation_references
 from dbt_debt.report.render_json import render_json, render_orphans_json
@@ -45,6 +46,7 @@ from dbt_debt.report.scorecard import (
 )
 from dbt_debt.report.spinner import status
 from dbt_debt.sqlparse import build_schema
+from dbt_debt.verdict.ignored import UnknownIgnoredModelError, ignored_model_ids
 
 _ORPHAN_INVENTORY_SKIP_MESSAGES: dict[str, str] = {
     "bigquery": (
@@ -384,6 +386,7 @@ def _config_from_args(args: argparse.Namespace) -> Config:
         top_n=args.top_n,
         cache=args.cache,
         cache_ttl_hours=args.cache_ttl,
+        ignore_file=Path(args.ignore_file) if args.ignore_file else None,
     )
 
 
@@ -425,7 +428,17 @@ def _run_scan(args: argparse.Namespace) -> int:
         )
         return 2
     try:
-        config = replace(config, warehouse=_resolve_warehouse(args.warehouse, manifest))
+        ignore_reasons = load_ignored_models(config.resolved_ignore_file)
+        resolved_ignored_ids = ignored_model_ids(manifest, ignore_reasons)
+    except (IgnoreConfigError, UnknownIgnoredModelError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    try:
+        config = replace(
+            config,
+            warehouse=_resolve_warehouse(args.warehouse, manifest),
+            ignored_model_ids=frozenset(resolved_ignored_ids),
+        )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -677,6 +690,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--clear-cache",
         action="store_true",
         help="Clear this project's cache first, then run a fresh scan that rebuilds it.",
+    )
+    scan.add_argument(
+        "--ignore-file",
+        default=None,
+        help="Path to the ignore-list JSON file naming models to always treat as active, each "
+        "with a reason (default: dbt-debt-ignore.json in --project-dir).",
     )
     scan.set_defaults(func=_run_scan)
     return parser

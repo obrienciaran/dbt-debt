@@ -1,0 +1,12 @@
+{
+  "ignored_models": [
+    {
+      "name": "example_model_name",
+      "reason": "Fed by an external system dbt-debt can't see in the query log (e.g. a bulk export or partner sync)."
+    },
+    {
+      "name": "another_model_name",
+      "reason": "Built ahead of a planned use that hasn't landed yet; revisit once it's wired up."
+    }
+  ]
+}

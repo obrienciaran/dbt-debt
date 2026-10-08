@@ -174,6 +174,73 @@ def test_manifest_without_models_exits_two(
     assert "has no models" in capsys.readouterr().err
 
 
+def test_ignore_file_defaults_to_the_project_dir() -> None:
+    args = _build_parser().parse_args(["scan", "--project-dir", "/proj"])
+    config = _config_from_args(args)
+    assert config.ignore_file is None
+    assert config.resolved_ignore_file == Path("/proj/dbt-debt-ignore.json")
+
+
+def test_ignore_file_flag_overrides_the_default() -> None:
+    args = _build_parser().parse_args(["scan", "--ignore-file", "/elsewhere/ignores.json"])
+    assert _config_from_args(args).resolved_ignore_file == Path("/elsewhere/ignores.json")
+
+
+def _model_node(name: str) -> dict[str, Any]:
+    return {
+        "resource_type": "model",
+        "name": name,
+        "database": "proj",
+        "schema": "mart",
+        "alias": name,
+    }
+
+
+def test_malformed_ignore_file_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_manifest(tmp_path, nodes={"model.p.m": _model_node("m")})
+    (tmp_path / "dbt-debt-ignore.json").write_text("{ not json")
+    assert main(["scan", "--project-dir", str(tmp_path)]) == 2
+    assert "not valid JSON" in capsys.readouterr().err
+
+
+def test_unknown_ignored_model_name_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_manifest(tmp_path, nodes={"model.p.m": _model_node("m")})
+    (tmp_path / "dbt-debt-ignore.json").write_text(
+        json.dumps({"ignored_models": [{"name": "does_not_exist", "reason": "typo"}]})
+    )
+    assert main(["scan", "--project-dir", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert "does_not_exist" in err
+    assert "not found in the manifest" in err
+
+
+def test_absent_ignore_file_is_not_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No dbt-debt-ignore.json at all is the common case (most projects never need one) and
+    # must behave exactly like an empty ignore list, not a configuration error.
+    _write_scannable_project(tmp_path, monkeypatch)
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache", "--print"]) == 0
+    assert "1 unused" in capsys.readouterr().out
+
+
+def test_ignored_model_is_excluded_from_the_unused_count_end_to_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_scannable_project(tmp_path, monkeypatch)
+    (tmp_path / "dbt-debt-ignore.json").write_text(
+        json.dumps({"ignored_models": [{"name": "m", "reason": "fed by an external export"}]})
+    )
+    assert main(["scan", "--project-dir", str(tmp_path), "--no-cache", "--print"]) == 0
+    out = capsys.readouterr().out
+    assert "1 active" in out
+    assert "0 unused" in out
+
+
 def test_warehouse_error_mid_scan_exits_three(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -70,6 +70,8 @@ class DeadModel:
     renderers can label non-model entries without a second list. On Snowflake,
     `time_travel_bytes` and `failsafe_bytes` are the retained copies the account still pays
     for on top of `total_bytes` (live data); both are 0 on BigQuery, which has no equivalent.
+    `ignored` and `reason` carry the operator override that removes this model from the headline
+    unused figures; it stays in `dead_models` so the rest of the report sees it consistently.
     """
 
     unique_id: str
@@ -80,6 +82,10 @@ class DeadModel:
     resource_type: str = "model"
     time_travel_bytes: int = 0
     failsafe_bytes: int = 0
+    ignored: bool = False
+    """True when the operator explicitly removed this model from headline unused figures."""
+    reason: str = ""
+    """The operator's stated reason for ignoring this model, empty when not ignored."""
 
 
 @dataclass(frozen=True)
@@ -382,6 +388,7 @@ def build_scorecard(
     usage_rows = list(usage_rows)
     queried = queried_model_ids(manifest, usage_rows)
     unqueried = dead_models(manifest, graph, queried)
+    ignored = config.ignored_model_ids
     first_seen_ids = first_seen_model_ids(manifest, first_seen or {})
     now_utc = now or datetime.now(timezone.utc)
     min_age = timedelta(days=config.min_age_days)
@@ -401,6 +408,11 @@ def build_scorecard(
     ):
         missing = missing_first_seen_models(unqueried, first_seen_ids)
     dead = unqueried - too_new - missing
+
+    # Ignored models are treated like exposures: they stay in the dead set so column-stage
+    # verdicts, removable tests, and the warehouse-evidence view see them consistently, but
+    # they are excluded from the headline unused count and reclaimable bytes at render time.
+    actionable_dead = dead - ignored
 
     # The rarity band gets the same too-new protection as the dead set: a model created
     # mid-window has not had a full window to accumulate queries.
@@ -422,7 +434,8 @@ def build_scorecard(
 
     # Storage reclaimed by dropping the whole dead tables. Only whole dead models have a real
     # figure: BigQuery reports no per-column size, so dead columns are not summed here.
-    reclaimable = sum(_model_bytes(manifest, storage_bytes, uid) for uid in dead)
+    # Ignored models stay dead for all internal verdicts but are excluded from reclaimable bytes.
+    reclaimable = sum(_model_bytes(manifest, storage_bytes, uid) for uid in actionable_dead)
 
     def rarely_used_entry(uid: str) -> RarelyUsedModel:
         row = usage_by_model[uid]
@@ -558,11 +571,14 @@ def build_scorecard(
 
     storage_by_key = dict(table_storage or {})
 
-    def ranked_assets(uids: Set[str]) -> tuple[DeadModel, ...]:
+    def ranked_assets(
+        uids: Set[str], reasons: Mapping[str, str] | None = None
+    ) -> tuple[DeadModel, ...]:
         ranked = sorted(uids, key=lambda uid: (-_model_bytes(manifest, storage_bytes, uid), uid))
 
         def entry(uid: str) -> DeadModel:
             storage = storage_by_key.get(manifest.models[uid].relation_key)
+            reason = reasons.get(uid, "") if reasons else ""
             return DeadModel(
                 unique_id=uid,
                 name=manifest.models[uid].name,
@@ -572,6 +588,8 @@ def build_scorecard(
                 resource_type=manifest.models[uid].resource_type,
                 time_travel_bytes=storage.time_travel_bytes if storage else 0,
                 failsafe_bytes=storage.failsafe_bytes if storage else 0,
+                ignored=uid in ignored,
+                reason=reason,
             )
 
         return tuple(entry(uid) for uid in ranked)
@@ -584,24 +602,26 @@ def build_scorecard(
         ),
         warehouse=config.warehouse,
         active_models=len(manifest.models) - len(unqueried),
-        unused_models=len(dead),
+        unused_models=len(actionable_dead),
         removable_tests=tuple(
-            t.unique_id for t in removable_tests(manifest, dead, dead_column_refs)
+            t.unique_id for t in removable_tests(manifest, actionable_dead, dead_column_refs)
         ),
-        unaffected_exposures=tuple(e.unique_id for e in unaffected_exposures(manifest, dead)),
+        unaffected_exposures=tuple(
+            e.unique_id for e in unaffected_exposures(manifest, actionable_dead)
+        ),
         affected_exposures=tuple(
             AffectedConsumer(kind="exposure", name=e.name, unique_id=e.unique_id)
-            for e in affected_exposures(manifest, dead)
+            for e in affected_exposures(manifest, actionable_dead)
         ),
         dead_exposures=tuple(
             AffectedConsumer(kind="exposure", name=e.name, unique_id=e.unique_id)
-            for e in dead_exposures(manifest, dead)
+            for e in dead_exposures(manifest, actionable_dead)
         ),
         affected_semantic=tuple(
             _affected_semantic_entry(manifest, a)
-            for a in affected_semantic_consumers(manifest, dead)
+            for a in affected_semantic_consumers(manifest, actionable_dead)
         ),
-        dead_models=ranked_assets(dead),
+        dead_models=ranked_assets(dead, config.ignore_reasons_by_id),
         too_new_models=ranked_assets(too_new),
         missing_first_seen=ranked_assets(missing),
         rarely_used=ranked_rarely_used(rare),

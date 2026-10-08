@@ -242,6 +242,12 @@ class Manifest:
     relations: dict[str, Relation] = field(default_factory=dict)
     """Sources only; every buildable node (model, seed, snapshot) lives in `models`."""
     semantic_consumers: dict[str, SemanticConsumer] = field(default_factory=dict)
+    disabled_models: frozenset[str] = field(default_factory=frozenset)
+    """Unique IDs of nodes present in the manifest's disabled section (e.g. `enabled: false`).
+
+    These are not buildable, so they never appear in `models`, but an ignore-list entry may still
+    name one. The ignore resolver warns and skips such entries rather than failing the scan.
+    """
 
     def relation_to_id(self) -> dict[str, str]:
         """Reverse map from each model's warehouse `relation_key` to its `unique_id`.

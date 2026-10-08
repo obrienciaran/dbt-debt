@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from dbt_debt.cli import _emit, _infer_database, _scan
 from dbt_debt.config import Config
 from dbt_debt.domain import TableHygiene, TableStorage, UsageRow
 from dbt_debt.report.scorecard import ColumnReport, DeadColumn, build_scorecard
+from dbt_debt.report.render_text import render_text
 from tests.fakes import FakeWarehouseClient
 
 FIXTURE = Path(__file__).parent / "fixtures" / "manifest.json"
@@ -20,6 +22,9 @@ FIXTURE = Path(__file__).parent / "fixtures" / "manifest.json"
 STG_KEY = "my-gcp-project.jaffle_shop.stg_orders"
 FCT_KEY = "my-gcp-project.jaffle_shop.fct_orders"
 SEED_KEY = "my-gcp-project.jaffle_shop.country_codes"
+STG_ID = "model.jaffle_shop.stg_orders"
+FCT_ID = "model.jaffle_shop.fct_orders"
+SEED_ID = "seed.jaffle_shop.country_codes"
 SOURCE_ID = "source.jaffle_shop.raw.orders"
 SOURCE_KEY = "my-gcp-project.raw.orders"
 TEST_ID = "test.jaffle_shop.not_null_fct_orders_order_id.a1b2c3"
@@ -66,22 +71,77 @@ def test_queried_mart_keeps_everything_active() -> None:
     assert card.dead_models == ()
 
 
-def test_test_on_dead_column_counts_as_removable() -> None:
-    # The fixture test guards fct_orders.order_id. With every model alive but that column dead,
-    # the test is still removable — the column stage's dead refs reach the tests verdict.
+def test_ignoring_the_bottom_of_a_dead_chain_excludes_it_from_headline_counts() -> None:
+    # fct_orders would be dead on warehouse evidence alone. Ignoring it removes it from the
+    # headline unused count and reclaimable bytes, but it stays in the dead model list so the
+    # warehouse-evidence view remains consistent.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    storage = {STG_KEY: 1024, FCT_KEY: 2048, SEED_KEY: 512}
+    config = replace(_config(), ignored_model_ids=frozenset({FCT_ID}))
+    card = build_scorecard(manifest, graph, [], storage, config)
+
+    assert (card.active_models, card.unused_models) == (0, 2)
+    assert [m.unique_id for m in card.dead_models] == [FCT_ID, STG_ID, SEED_ID]
+    assert card.reclaimable_bytes == 1536
+    assert FCT_ID not in {m.unique_id for m in card.dead_models if not m.ignored}
+
+
+def test_ignoring_a_dead_model_keeps_it_in_dead_models() -> None:
+    # The ignore list is a render-time override, not a resurrection; the ignored model stays
+    # in the dead list with its flag set.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    config = replace(_config(), ignored_model_ids=frozenset({FCT_ID}))
+    card = build_scorecard(manifest, graph, [], {}, config)
+
+    ignored = [m for m in card.dead_models if m.ignored]
+    assert [m.unique_id for m in ignored] == [FCT_ID]
+
+
+def test_ignoring_an_already_active_model_is_a_no_op() -> None:
     manifest = load_manifest(FIXTURE)
     graph = Graph.from_manifest(manifest)
     usage = [UsageRow(relation_key=FCT_KEY, query_count=4)]
+    config = replace(_config(), ignored_model_ids=frozenset({FCT_ID}))
+    card = build_scorecard(manifest, graph, usage, {}, config)
+
+    assert (card.active_models, card.unused_models) == (3, 0)
+
+
+def test_ignored_model_stays_dead_for_column_stage_and_removable_tests() -> None:
+    # The key invariant: an ignored model is not "revived" by the ignore list. Its columns still
+    # show as unused, it still ranks in the dead-model list, and removable tests still see it.
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
     columns = ColumnReport(
         active=4,
         unused=1,
-        removable=0,
-        dead_columns=(DeadColumn("model.jaffle_shop.fct_orders", "fct_orders", "order_id", True),),
+        removable=1,
+        dead_columns=(DeadColumn(FCT_ID, "fct_orders", "order_id", False),),
     )
-    card = build_scorecard(manifest, graph, usage, {}, _config(), column_report=columns)
+    config = replace(_config(), ignored_model_ids=frozenset({FCT_ID}))
+    card = build_scorecard(manifest, graph, [], {}, config, column_report=columns)
 
-    assert card.unused_models == 0
+    assert card.unused_models == 2
+    assert card.columns is not None
+    assert card.columns.unused == 1
     assert card.removable_tests == (TEST_ID,)
+    assert any(m.unique_id == FCT_ID and m.ignored for m in card.dead_models)
+
+
+def test_ignored_model_renders_with_reason() -> None:
+    manifest = load_manifest(FIXTURE)
+    graph = Graph.from_manifest(manifest)
+    config = replace(
+        _config(),
+        ignored_model_ids=frozenset({FCT_ID}),
+        ignore_reasons_by_id={FCT_ID: "external export"},
+    )
+    card = build_scorecard(manifest, graph, [], {}, config)
+    text = render_text(card)
+    assert "Ignored overrides" in text
+    assert "external export" in text
 
 
 def test_too_new_node_is_set_aside_from_every_unused_figure() -> None:

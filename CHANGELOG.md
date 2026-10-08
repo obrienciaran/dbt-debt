@@ -6,6 +6,17 @@ All notable changes to this project are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Added
+
+- **An ignore list for overriding a verdict by hand.** Name a model in `dbt-debt-ignore.json`
+  (in the project directory, or wherever `--ignore-file` points) with a reason, and it's
+  treated as fully active everywhere in the report — the unused count, reclaimable storage,
+  removable tests, exposure and semantic-layer impact — with no separate section calling it
+  out. For real consumers the warehouse can't see at all (a bulk export, a use not wired up
+  yet) that an `exposures:` block can't help with, since an exposure only flags an unused
+  model for review rather than excluding it. A name that matches no model in the manifest
+  fails the scan immediately instead of silently doing nothing.
+
 ### Changed
 
 - **The BigQuery library is now the `[bigquery]` optional extra, like every other warehouse

@@ -269,6 +269,16 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
         ]
         lines += [f"  {i}. {_format_rare(m)}" for i, m in enumerate(shown_rare, start=1)]
 
+    ignored = [m for m in scorecard.dead_models if m.ignored]
+    if ignored:
+        lines += [
+            "",
+            f"Ignored overrides ({len(ignored)}):",
+            "  (excluded from the headline unused count and reclaimable bytes; still dead for "
+            "column-stage and removable-tests verdicts)",
+        ]
+        lines += [f"  {i}. {_format_model(m)}" for i, m in enumerate(ignored, start=1)]
+
     if scorecard.unpartitioned_tables:
         count = len(scorecard.unpartitioned_tables)
         lines += [
@@ -291,6 +301,16 @@ def render_text(scorecard: Scorecard, *, detail: bool = False, top_n: int = 10) 
 
     if detail:
         lines += _detail_section(scorecard)
+    ignored = [m for m in scorecard.dead_models if m.ignored]
+    if ignored:
+        lines += [
+            "",
+            f"Ignored overrides ({len(ignored)}):",
+            "  (excluded from the headline unused count and reclaimable bytes; still dead for "
+            "column-stage and removable-tests verdicts)",
+        ]
+        for model in ignored:
+            lines.append(f"  - {_format_model(model)}")
 
     return _strip_controls("\n".join(lines))
 
@@ -559,7 +579,10 @@ def _detail_models(dead_models: tuple[DeadModel, ...]) -> list[str]:
     for model in dead_models:
         size = f"  {humanize_bytes(model.total_bytes)}" if model.total_bytes > 0 else ""
         path = f"  {model.file_path}" if model.file_path else ""
-        lines.append(f"  - {model.name}{_kind_tag(model)}{size}{_retained_tag(model)}{path}")
+        ignored = f"  (ignored: {model.reason})" if model.ignored else ""
+        lines.append(
+            f"  - {model.name}{_kind_tag(model)}{size}{_retained_tag(model)}{ignored}{path}"
+        )
     return lines
 
 
@@ -609,7 +632,8 @@ def _dead_kind_breakdown(dead_models: tuple[DeadModel, ...]) -> str:
 
 def _format_model(model: DeadModel) -> str:
     size = f" ({humanize_bytes(model.total_bytes)})" if model.total_bytes > 0 else ""
-    return f"{model.name}{_kind_tag(model)}{size}{_retained_tag(model)}"
+    ignored = f"  (ignored: {model.reason})" if model.ignored else ""
+    return f"{model.name}{_kind_tag(model)}{size}{_retained_tag(model)}{ignored}"
 
 
 def _format_rare(model: RarelyUsedModel) -> str:

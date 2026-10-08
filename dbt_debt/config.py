@@ -7,7 +7,7 @@ place that builds it from arguments.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_QUERY_COMMENT_PATTERN = r'"app":\s*"dbt"'
@@ -64,8 +64,8 @@ comment above `RealRedshiftClient.table_usage`.
 class Config:
     """Everything a scan needs, resolved once from CLI arguments."""
 
-    project_dir: Path = Path(".")
-    target_path: Path = Path("target")
+    project_dir: Path = field(default_factory=lambda: Path("."))
+    target_path: Path = field(default_factory=lambda: Path("target"))
     project: str | None = None
     region: str = "US"
     warehouse: str = "bigquery"
@@ -86,6 +86,13 @@ class Config:
     cache_ttl_hours: float | None = None
     """An explicit `--cache-ttl`; None means unspecified, so new entries get the 1h default and
     existing entries keep the TTL they were written with."""
+    ignore_file: Path | None = None
+    """An explicit `--ignore-file`; None means the default `dbt-debt-ignore.json` in `project_dir`."""
+    ignored_model_ids: frozenset[str] = frozenset()
+    """Manifest unique_ids resolved from the ignore file. Empty until the CLI loads the file and
+    resolves it against the manifest (needs the manifest, so it cannot happen in `Config` itself)."""
+    ignore_reasons_by_id: dict[str, str] = field(default_factory=dict)
+    """Reasons keyed by ignored model unique_id, populated by the CLI for rendering."""
 
     DEFAULT_CACHE_TTL_HOURS = 1.0
 
@@ -117,3 +124,9 @@ class Config:
         """Location of `catalog.json` (consumed by the column stage)."""
 
         return self.project_dir / self.target_path / "catalog.json"
+
+    @property
+    def resolved_ignore_file(self) -> Path:
+        """Where the ignore-list file lives: `ignore_file` if set, else the project default."""
+
+        return self.ignore_file or self.project_dir / "dbt-debt-ignore.json"

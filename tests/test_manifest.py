@@ -240,6 +240,55 @@ def test_parses_semantic_models_metrics_and_saved_queries() -> None:
     assert (saved.kind, saved.column_refs) == ("saved_query", ())
 
 
+def test_disabled_nodes_are_collected_by_unique_id() -> None:
+    data = {
+        "metadata": {
+            "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+            "project_name": "p",
+        },
+        "nodes": {
+            "model.p.m": {"resource_type": "model", "name": "m"},
+        },
+        "disabled": [
+            {"resource_type": "model", "name": "off_one", "unique_id": "model.p.off_one"},
+            {"resource_type": "model", "name": "off_two", "unique_id": "model.p.off_two"},
+        ],
+    }
+    assert parse_manifest(data).disabled_models == frozenset({"model.p.off_one", "model.p.off_two"})
+
+
+def test_disabled_entries_that_are_not_objects_or_unique_id_strings_are_skipped() -> None:
+    data = {
+        "metadata": {
+            "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+            "project_name": "p",
+        },
+        "nodes": {
+            "model.p.m": {"resource_type": "model", "name": "m"},
+        },
+        "disabled": [
+            "a string, not an object",
+            {"resource_type": "model", "name": "no_id"},
+            {"unique_id": 123},
+            {"resource_type": "model", "name": "kept", "unique_id": "model.p.kept"},
+        ],
+    }
+    assert parse_manifest(data).disabled_models == frozenset({"model.p.kept"})
+
+
+def test_no_disabled_section_means_no_disabled_models() -> None:
+    data = {
+        "metadata": {
+            "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+            "project_name": "p",
+        },
+        "nodes": {
+            "model.p.m": {"resource_type": "model", "name": "m"},
+        },
+    }
+    assert parse_manifest(data).disabled_models == frozenset()
+
+
 def test_malformed_manifest_raises_artifact_error_with_the_path(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text("{ truncated")
